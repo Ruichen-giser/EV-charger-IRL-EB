@@ -46,12 +46,41 @@ def _station_was_placed(info: dict[str, Any]) -> bool:
 
 
 def _expert_reference_sequence(layout: CountyLayout) -> list[int]:
-    """经 MDP 规则处理后的专家建站序列（legacy: first_visit 去重），不跑 teacher forcing。"""
+    """经 MDP 规则处理后的专家动作序列（legacy: first_visit 去重），不仿真环境。"""
     blob = np.load(layout.grid_npz, allow_pickle=False)
     if "expert_actions" not in blob:
         return []
     seq = expert_action_sequence(blob["expert_actions"], layout.W)
     return [int(a) for a in seq]
+
+
+def _expert_deployed_sequence(
+    layout: CountyLayout,
+    channel_cfg: ObsChannelConfig,
+) -> list[int]:
+    """在环境中按专家动作 rollout，仅记录实际成功建站的格点（与 policy rollout 对齐）。"""
+    env = MultiChannelGridObservationWrapper(ChargingDeploymentEnv(layout.grid_npz), channel_cfg)
+    base = unwrap_charging_env(env)
+    if base.expert_actions is None:
+        env.close()
+        return []
+
+    deployed: list[int] = []
+    obs, _ = env.reset()
+    del obs
+    for a_expert in expert_action_sequence(base.expert_actions, base.W):
+        mask = action_mask_fn(env)
+        a_int = int(a_expert)
+        obs, _, term, trunc, info = env.step(a_int)
+        if bool(mask[a_int]) and _station_was_placed(info):
+            deployed.append(a_int)
+        if info.get("invalid_action"):
+            continue
+        if term or trunc:
+            break
+
+    env.close()
+    return deployed
 
 
 def _score_step(
@@ -160,7 +189,7 @@ def _evaluate_policy_rollout(
         out = empty_eval_dict(eval_mode="policy_rollout")
         return out
 
-    ref_seq = expert_ref if expert_ref is not None else _expert_reference_sequence(layout)
+    ref_seq = expert_ref if expert_ref is not None else _expert_deployed_sequence(layout, channel_cfg)
     policy_built: list[int] = []
 
     obs, _ = env.reset()
@@ -240,7 +269,7 @@ def evaluate_iq_all(
 ) -> dict[str, Any]:
     """合并两类评估：expert_rollin_* 与 policy_rollout_*。"""
     _set_agent_eval(agent)
-    expert_ref = _expert_reference_sequence(layout)
+    expert_ref = _expert_deployed_sequence(layout, channel_cfg)
 
     def score_fn(obs_t: torch.Tensor) -> torch.Tensor:
         return agent.q_net(obs_t)

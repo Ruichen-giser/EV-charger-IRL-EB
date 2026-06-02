@@ -127,7 +127,8 @@ class DiscreteSoftQAgent:
             else:
                 q_valid = q_all[mask]
 
-        # IQ-Learn 离线 IRL：损失仅在专家转移上计算（策略 buffer 供探索/扩展，不参与 IQ 目标）
+        # IQ-Learn：专家对 (s,a) 为主；策略 buffer 的 (s,a) 也参与同一目标，使 closed-loop
+        # 访问的状态获得梯度（仅训专家时 policy rollout 指标常会整条曲线不变）。
         if is_expert is not None:
             m = is_expert.view(-1).bool()
             if not bool(m.any()):
@@ -139,10 +140,6 @@ class DiscreteSoftQAgent:
                     "Q_max": 0.0,
                     "policy_entropy": entropy,
                 }
-            q_sa = q_sa[m]
-            v_s = v_s[m]
-            next_v = next_v[m]
-            done = done[m]
 
         from iq_learn.iq_loss import iq_learn_loss
 
@@ -216,6 +213,7 @@ class DiscreteSoftQAgent:
 
     @torch.no_grad()
     def predict_action(self, obs: torch.Tensor, mask: torch.Tensor) -> int:
+        """在合法动作上取 Q 最大；并列最大时取索引最小者（稳定、可复现）。"""
         self.q_net.eval()
         q = self.q_net(obs).reshape(-1)
         valid = mask.reshape(-1)
@@ -223,10 +221,13 @@ class DiscreteSoftQAgent:
         if valid_idx.numel() == 0:
             raise RuntimeError("predict_action: 无合法动作（action mask 全 False）")
         qv = q[valid_idx]
-        if torch.isfinite(qv).all():
-            pick = int(torch.argmax(qv).item())
-            return int(valid_idx[pick].item())
-        return int(valid_idx[int(torch.randint(valid_idx.numel(), (1,)).item())].item())
+        if not torch.isfinite(qv).all():
+            return int(valid_idx[int(torch.randint(valid_idx.numel(), (1,)).item())].item())
+        best = float(qv.max().item())
+        tied = (qv >= best - 1e-6).nonzero(as_tuple=False).reshape(-1)
+        # 并列最大 Q 时取 action id 最小者（与 valid_idx 升序下 argmax(qv) 一致，且可复现）
+        pick = int(tied[torch.argmin(valid_idx[tied]).item()].item())
+        return int(valid_idx[pick].item())
 
     def save(self, path: str) -> None:
         torch.save(

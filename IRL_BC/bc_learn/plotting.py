@@ -40,6 +40,12 @@ _POLICY_PLOT_SPECS: list[tuple[str, str, str]] = [
     ("policy_rollout_mean_distance_km", "Chamfer (policy rollout, km)", "#9D755D"),
 ]
 
+_POLICY_LCSS_PLOT_SPECS: list[tuple[str, str, str]] = [
+    ("policy_rollout_lcss_eps0_km", "LCSS ε=0 km (policy rollout)", "#4C78A8"),
+    ("policy_rollout_lcss_eps2_km", "LCSS ε=2 km (policy rollout)", "#F58518"),
+    ("policy_rollout_lcss_eps2_829_km", "LCSS ε=2.829 km (policy rollout)", "#B279A2"),
+]
+
 _POLICY_RATE_KEYS = frozenset(
     {
         *(f"policy_rollout_{k}" for k in POLICY_ROLLOUT_CORE_KEYS if k not in ("grid_hausdorff_km", "mean_distance_km")),
@@ -88,15 +94,15 @@ def _configure_plot_font() -> bool:
     return False
 
 
-def _plot_metric_panel(
-    axes,
+def _plot_metric_row(
+    axes_row,
     metrics_log: list[dict[str, Any]],
     steps_m,
     specs: list[tuple[str, str, str]],
     *,
     rate_keys: frozenset[str] = frozenset(),
 ) -> None:
-    for ax, (key, label, color) in zip(axes.flat, specs):
+    for ax, (key, label, color) in zip(axes_row, specs):
         vals = [float(r.get(key, 0)) for r in metrics_log]
         plot_metric_with_band(ax, steps_m, vals, color=color, label=label)
         if key in rate_keys:
@@ -104,13 +110,14 @@ def _plot_metric_panel(
 
 
 def plot_bc_metrics(metrics_log: list[dict[str, Any]], out_path: str | Path, *, title: str) -> None:
+    """训练曲线：loss/entropy → expert roll-in → policy rollout → LCSS。"""
     if not metrics_log:
         return
     _configure_plot_font()
 
     steps = [int(r["step"]) for r in metrics_log]
     steps_m = training_steps_million(steps)
-    fig, axes = plt.subplots(3, 6, figsize=(18, 10))
+    fig, axes = plt.subplots(4, 6, figsize=(18, 13))
 
     plot_metric_with_band(
         axes[0, 0],
@@ -129,12 +136,16 @@ def plot_bc_metrics(metrics_log: list[dict[str, Any]], out_path: str | Path, *, 
     for j in range(2, 6):
         axes[0, j].axis("off")
 
-    _plot_metric_panel(axes[1:2], metrics_log, steps_m, _EXPERT_PLOT_SPECS, rate_keys=_EVAL_RATE_KEYS)
-    _plot_metric_panel(axes[2:3], metrics_log, steps_m, _POLICY_PLOT_SPECS, rate_keys=_POLICY_RATE_KEYS)
+    _plot_metric_row(axes[1], metrics_log, steps_m, _EXPERT_PLOT_SPECS, rate_keys=_EVAL_RATE_KEYS)
+    _plot_metric_row(axes[2], metrics_log, steps_m, _POLICY_PLOT_SPECS, rate_keys=_POLICY_RATE_KEYS)
+    _plot_metric_row(axes[3, :3], metrics_log, steps_m, _POLICY_LCSS_PLOT_SPECS, rate_keys=_POLICY_RATE_KEYS)
+    for j in range(3, 6):
+        axes[3, j].axis("off")
 
     style_metric_axes(fig)
     axes[1, 0].set_ylabel("Expert roll-in", fontsize=10, labelpad=8)
     axes[2, 0].set_ylabel("Policy rollout", fontsize=10, labelpad=8)
+    axes[3, 0].set_ylabel("LCSS (policy rollout)", fontsize=10, labelpad=8)
 
     fig.suptitle(title, fontsize=11)
     fig.tight_layout()

@@ -106,10 +106,21 @@ class GridCNNBCAgent:
 
     @torch.no_grad()
     def predict_action(self, obs: torch.Tensor, mask: torch.Tensor) -> int:
+        """在合法动作上取 logit 最大；并列最大时取 action id 最小者（稳定、可复现）。"""
         self.q_net.eval()
-        logits = self.logits(obs)
-        neg_inf = torch.finfo(logits.dtype).min
-        return int(logits.masked_fill(~mask, neg_inf).argmax(dim=1).item())
+        logits = self.logits(obs).reshape(-1)
+        valid = mask.reshape(-1)
+        valid_idx = torch.nonzero(valid, as_tuple=False).reshape(-1)
+        if valid_idx.numel() == 0:
+            raise RuntimeError("predict_action: 无合法动作（action mask 全 False）")
+        lv = logits[valid_idx]
+        if not torch.isfinite(lv).all():
+            neg_inf = torch.finfo(logits.dtype).min
+            return int(logits.masked_fill(~mask, neg_inf).argmax(dim=1).item())
+        best = float(lv.max().item())
+        tied = (lv >= best - 1e-6).nonzero(as_tuple=False).reshape(-1)
+        pick = int(tied[torch.argmin(valid_idx[tied]).item()].item())
+        return int(valid_idx[pick].item())
 
     def save(self, path: str) -> None:
         torch.save(

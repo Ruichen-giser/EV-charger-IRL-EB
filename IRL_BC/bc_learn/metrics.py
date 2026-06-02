@@ -183,7 +183,7 @@ def masked_reciprocal_rank(
 
 def empty_eval_dict(*, eval_mode: str = "none") -> dict[str, float | int | str]:
     if eval_mode == "policy_rollout":
-        return {
+        out: dict[str, float | int | str] = {
             "eval_mode": eval_mode,
             "site_precision": 0.0,
             "site_recall": 0.0,
@@ -194,6 +194,9 @@ def empty_eval_dict(*, eval_mode: str = "none") -> dict[str, float | int | str]:
             "n_expert_stations": 0,
             "mean_distance_km": 0.0,
         }
+        for k in POLICY_ROLLOUT_LCSS_KEYS:
+            out[k] = 0.0
+        return out
     return {
         "eval_mode": eval_mode,
         "expert_greedy_match_rate": 0.0,
