@@ -1,0 +1,138 @@
+"""IQ-Learn training / evaluation curves (smoothed line + light band)."""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+import matplotlib.pyplot as plt
+
+from iq_learn.metrics import EXPERT_ROLLIN_CORE_KEYS, POLICY_ROLLOUT_CORE_KEYS, POLICY_ROLLOUT_LCSS_KEYS
+from metrics_viz import plot_metric_with_band, style_metric_axes, training_steps_million
+
+_EVAL_RATE_KEYS = frozenset(
+    {
+        f"expert_rollin_{k}"
+        for k in EXPERT_ROLLIN_CORE_KEYS
+        if k != "mean_distance_km"
+    }
+    | {
+        f"policy_rollout_{k}"
+        for k in POLICY_ROLLOUT_CORE_KEYS
+        if k not in ("grid_hausdorff_km", "mean_distance_km")
+    }
+)
+
+_EXPERT_PLOT_SPECS: list[tuple[str, str, str]] = [
+    ("expert_rollin_expert_greedy_match_rate", "Match (expert roll-in)", "#4C78A8"),
+    ("expert_rollin_top10_accuracy", "Top-10 (expert roll-in)", "#F58518"),
+    ("expert_rollin_mean_reciprocal_rank", "MRR (expert roll-in)", "#B279A2"),
+    ("expert_rollin_mean_distance_km", "Dist (expert roll-in, km)", "#9D755D"),
+]
+
+_POLICY_PLOT_SPECS: list[tuple[str, str, str]] = [
+    ("policy_rollout_site_precision", "Site precision (policy rollout)", "#4C78A8"),
+    ("policy_rollout_site_recall", "Site recall (policy rollout)", "#F58518"),
+    ("policy_rollout_site_f1", "Site F1 (policy rollout)", "#B279A2"),
+    ("policy_rollout_jaccard_similarity", "Jaccard (policy rollout)", "#72B7B2"),
+    ("policy_rollout_grid_hausdorff_km", "Hausdorff (policy rollout, km)", "#E45756"),
+    ("policy_rollout_mean_distance_km", "Chamfer (policy rollout, km)", "#9D755D"),
+]
+
+_POLICY_RATE_KEYS = frozenset(
+    {
+        *(f"policy_rollout_{k}" for k in POLICY_ROLLOUT_CORE_KEYS if k not in ("grid_hausdorff_km", "mean_distance_km")),
+        *(f"policy_rollout_{k}" for k in POLICY_ROLLOUT_LCSS_KEYS),
+    }
+)
+
+
+def _configure_plot_font() -> bool:
+    from matplotlib import font_manager
+
+    candidates: list[Path] = []
+    if sys.platform == "win32":
+        win_fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+        candidates.extend(
+            [
+                win_fonts / "msyh.ttc",
+                win_fonts / "msyhbd.ttc",
+                win_fonts / "simhei.ttf",
+                win_fonts / "simsun.ttc",
+            ]
+        )
+    elif sys.platform == "darwin":
+        candidates.extend(
+            [
+                Path("/System/Library/Fonts/PingFang.ttc"),
+                Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+            ]
+        )
+
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            font_manager.fontManager.addfont(str(path))
+            name = font_manager.FontProperties(fname=str(path)).get_name()
+            plt.rcParams["font.family"] = name
+            plt.rcParams["font.sans-serif"] = [name, "DejaVu Sans"]
+            plt.rcParams["axes.unicode_minus"] = False
+            return True
+        except Exception:
+            continue
+
+    plt.rcParams["axes.unicode_minus"] = False
+    return False
+
+
+def plot_iq_metrics(metrics_log: list[dict[str, Any]], out_path: str | Path, *, title: str) -> None:
+    """训练曲线：第 2 行 expert roll-in，第 3 行 policy rollout。"""
+    if not metrics_log:
+        return
+    _configure_plot_font()
+
+    steps = [int(r["step"]) for r in metrics_log]
+    steps_m = training_steps_million(steps)
+    fig, axes = plt.subplots(3, 6, figsize=(18, 10))
+
+    plot_metric_with_band(
+        axes[0, 0],
+        steps_m,
+        [float(r.get("loss", 0)) for r in metrics_log],
+        color="#54A24B",
+        label="IQ loss",
+    )
+    plot_metric_with_band(
+        axes[0, 1],
+        steps_m,
+        [float(r.get("Q_mean", 0)) for r in metrics_log],
+        color="#4C78A8",
+        label="Q_mean (train batch)",
+    )
+    for j in range(2, 6):
+        axes[0, j].axis("off")
+
+    for ax, (key, label, color) in zip(axes[1], _EXPERT_PLOT_SPECS):
+        vals = [float(r.get(key, 0)) for r in metrics_log]
+        plot_metric_with_band(ax, steps_m, vals, color=color, label=label)
+        if key in _EVAL_RATE_KEYS:
+            ax.set_ylim(0.0, 1.0)
+
+    for ax, (key, label, color) in zip(axes[2], _POLICY_PLOT_SPECS):
+        vals = [float(r.get(key, 0)) for r in metrics_log]
+        plot_metric_with_band(ax, steps_m, vals, color=color, label=label)
+        if key in _POLICY_RATE_KEYS:
+            ax.set_ylim(0.0, 1.0)
+
+    style_metric_axes(fig)
+    axes[1, 0].set_ylabel("Expert roll-in", fontsize=10, labelpad=8)
+    axes[2, 0].set_ylabel("Policy rollout", fontsize=10, labelpad=8)
+
+    fig.suptitle(title, fontsize=11)
+    fig.tight_layout()
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig)

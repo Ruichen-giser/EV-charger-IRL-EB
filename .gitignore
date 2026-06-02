@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# macOS
+.DS_Store
+._*
+
+# IDE
+.vscode/
+.idea/
+
+# Generated outputs (keep directory via .gitkeep)
+outputs/*
+!outputs/.gitkeep
+
+# Large raw/processed data (provide your own under data/)
+data/*
+!data/README.md
+
+# Model checkpoints and training artifacts
+*.pt
+*.pkl
+*.npz
+*.summary.json
+
+# Logs and figures
+*.log
