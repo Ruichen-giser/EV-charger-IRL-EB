@@ -30,7 +30,7 @@ python main.py --county Los_Angeles
 
 训练结束保存权重：`IRL_BC_YYYYMMDD_seed{N}.pt`
 
-评估：`expert roll-in`（teacher forcing）与 `policy rollout`（closed-loop）；指标含 match、top10、MRR、Jaccard、Hausdorff、dist_km。
+评估：`expert roll-in`（teacher forcing）与 `policy rollout`（closed-loop）；环境 `max_steps` 与专家轨迹步数一致。指标含 match、top10、MRR、Jaccard、Hausdorff、Chamfer、LCSS。
 
 ## 目录说明
 

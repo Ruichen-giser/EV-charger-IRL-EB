@@ -81,7 +81,8 @@ class ChargingDeploymentEnv(gym.Env):
         if max_steps is not None:
             self.max_steps = int(max_steps)
         elif self.expert_actions is not None and len(self.expert_actions) > 0:
-            self.max_steps = max(int(len(self.expert_actions)), n_valid, 1)
+            # 与 expert roll-in / policy rollout 一致：步数 = 专家轨迹长度，不与 n_valid 取 max。
+            self.max_steps = mdp_config.expert_trajectory_length(self.expert_actions, self.W)
         else:
             self.max_steps = max(n_valid, 1)
 

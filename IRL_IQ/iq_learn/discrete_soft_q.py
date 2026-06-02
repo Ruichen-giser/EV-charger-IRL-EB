@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from cnn_config import CNN_DROPOUT, CNN_N_CONV_LAYERS
 from models.simple_grid_cnn import SimpleGridCNN
@@ -127,11 +128,10 @@ class DiscreteSoftQAgent:
             else:
                 q_valid = q_all[mask]
 
-        # IQ-Learn：专家对 (s,a) 为主；策略 buffer 的 (s,a) 也参与同一目标，使 closed-loop
-        # 访问的状态获得梯度（仅训专家时 policy rollout 指标常会整条曲线不变）。
+        # IQ 目标仅在专家转移上；另加 BC 交叉熵，使 greedy 在专家状态上能区分动作。
         if is_expert is not None:
-            m = is_expert.view(-1).bool()
-            if not bool(m.any()):
+            m_expert = is_expert.view(-1).bool()
+            if not bool(m_expert.any()):
                 return {
                     "loss": 0.0,
                     "skipped_step": 1.0,
@@ -140,10 +140,21 @@ class DiscreteSoftQAgent:
                     "Q_max": 0.0,
                     "policy_entropy": entropy,
                 }
+            q_sa = q_sa[m_expert]
+            v_s = v_s[m_expert]
+            next_v = next_v[m_expert]
+            done = done[m_expert]
+            actions_e = actions[m_expert].view(-1)
+            logits_e = q_all[m_expert]
+            mask_e = mask[m_expert]
+        else:
+            actions_e = actions.view(-1)
+            logits_e = q_all
+            mask_e = mask
 
         from iq_learn.iq_loss import iq_learn_loss
 
-        loss, metrics = iq_learn_loss(
+        iq_loss, metrics = iq_learn_loss(
             q_sa=q_sa,
             v_s=v_s,
             next_v=next_v,
@@ -152,6 +163,11 @@ class DiscreteSoftQAgent:
             alpha_reg=self.alpha_reg,
             use_chi=self.use_chi,
         )
+        neg_inf = torch.finfo(q_all.dtype).min
+        bc_loss = F.cross_entropy(logits_e.masked_fill(~mask_e, neg_inf), actions_e)
+        loss = iq_loss + bc_loss
+        metrics["iq_loss"] = float(iq_loss.detach())
+        metrics["bc_loss"] = float(bc_loss.detach())
 
         self.optimizer.zero_grad()
         if torch.isfinite(loss):
@@ -213,21 +229,11 @@ class DiscreteSoftQAgent:
 
     @torch.no_grad()
     def predict_action(self, obs: torch.Tensor, mask: torch.Tensor) -> int:
-        """在合法动作上取 Q 最大；并列最大时取索引最小者（稳定、可复现）。"""
+        """在合法动作上取 Q 最大（masked argmax，与 BC 一致）。"""
         self.q_net.eval()
-        q = self.q_net(obs).reshape(-1)
-        valid = mask.reshape(-1)
-        valid_idx = torch.nonzero(valid, as_tuple=False).reshape(-1)
-        if valid_idx.numel() == 0:
-            raise RuntimeError("predict_action: 无合法动作（action mask 全 False）")
-        qv = q[valid_idx]
-        if not torch.isfinite(qv).all():
-            return int(valid_idx[int(torch.randint(valid_idx.numel(), (1,)).item())].item())
-        best = float(qv.max().item())
-        tied = (qv >= best - 1e-6).nonzero(as_tuple=False).reshape(-1)
-        # 并列最大 Q 时取 action id 最小者（与 valid_idx 升序下 argmax(qv) 一致，且可复现）
-        pick = int(tied[torch.argmin(valid_idx[tied]).item()].item())
-        return int(valid_idx[pick].item())
+        q = self.q_net(obs)
+        neg_inf = torch.finfo(q.dtype).min
+        return int(q.masked_fill(~mask, neg_inf).argmax(dim=1).item())
 
     def save(self, path: str) -> None:
         torch.save(

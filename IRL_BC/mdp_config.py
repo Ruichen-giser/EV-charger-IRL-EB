@@ -1,5 +1,9 @@
 """MDP 模式：legacy（旧版）与 repeat（允许同格重复建站）。"""
 
+from __future__ import annotations
+
+import numpy as np
+
 # 运行时由 apply_mdp_mode() 设置；默认 legacy
 ONE_STATION_PER_CELL: bool = True
 
@@ -23,3 +27,22 @@ def apply_mdp_mode(mode: str) -> None:
 
 def current_mdp_mode() -> str:
     return "legacy" if ONE_STATION_PER_CELL else "repeat"
+
+
+def expert_trajectory_length(expert_actions: np.ndarray, grid_w: int) -> int:
+    """专家决策步数（与 expert_action_sequence 长度一致，供 env max_steps 使用）。"""
+    raw = np.asarray(expert_actions, dtype=np.int64).reshape(-1)
+    if not raw.size:
+        return 1
+    if ONE_STATION_PER_CELL:
+        seen: set[tuple[int, int]] = set()
+        n = 0
+        w = int(grid_w)
+        for a in raw:
+            gx, gy = int(a) % w, int(a) // w
+            if (gx, gy) in seen:
+                continue
+            seen.add((gx, gy))
+            n += 1
+        return max(n, 1)
+    return max(int(raw.size), 1)

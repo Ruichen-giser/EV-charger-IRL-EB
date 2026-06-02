@@ -93,6 +93,12 @@ def _configure_plot_font() -> bool:
     return False
 
 
+def _hide_unused_axes(axes_row, n_used: int) -> None:
+    """一行 6 列但指标不足时，隐藏尾部空轴（否则会显示为空白子图）。"""
+    for ax in axes_row[n_used:]:
+        ax.axis("off")
+
+
 def _plot_metric_row(
     axes_row,
     metrics_log: list[dict[str, Any]],
@@ -106,6 +112,7 @@ def _plot_metric_row(
         plot_metric_with_band(ax, steps_m, vals, color=color, label=label)
         if key in rate_keys:
             ax.set_ylim(0.0, 1.0)
+    _hide_unused_axes(axes_row, len(specs))
 
 
 def plot_iq_metrics(metrics_log: list[dict[str, Any]], out_path: str | Path, *, title: str) -> None:
@@ -132,14 +139,11 @@ def plot_iq_metrics(metrics_log: list[dict[str, Any]], out_path: str | Path, *, 
         color="#4C78A8",
         label="Q_mean (train batch)",
     )
-    for j in range(2, 6):
-        axes[0, j].axis("off")
+    _hide_unused_axes(axes[0], 2)
 
     _plot_metric_row(axes[1], metrics_log, steps_m, _EXPERT_PLOT_SPECS, rate_keys=_EVAL_RATE_KEYS)
     _plot_metric_row(axes[2], metrics_log, steps_m, _POLICY_PLOT_SPECS, rate_keys=_POLICY_RATE_KEYS)
-    _plot_metric_row(axes[3, :3], metrics_log, steps_m, _POLICY_LCSS_PLOT_SPECS, rate_keys=_POLICY_RATE_KEYS)
-    for j in range(3, 6):
-        axes[3, j].axis("off")
+    _plot_metric_row(axes[3], metrics_log, steps_m, _POLICY_LCSS_PLOT_SPECS, rate_keys=_POLICY_RATE_KEYS)
 
     style_metric_axes(fig)
     axes[1, 0].set_ylabel("Expert roll-in", fontsize=10, labelpad=8)
