@@ -5,8 +5,6 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
 from cnn_config import CNN_DROPOUT, CNN_N_CONV_LAYERS
 from models.simple_grid_cnn import SimpleGridCNN
 from models.soft_q_ops import masked_soft_value, soft_policy_entropy
@@ -128,10 +126,10 @@ class DiscreteSoftQAgent:
             else:
                 q_valid = q_all[mask]
 
-        # IQ 目标仅在专家转移上；另加 BC 交叉熵，使 greedy 在专家状态上能区分动作。
+        # IQ-Learn 离线 IRL：损失仅在专家转移上计算（策略 buffer 供探索/扩展，不参与 IQ 目标）
         if is_expert is not None:
-            m_expert = is_expert.view(-1).bool()
-            if not bool(m_expert.any()):
+            m = is_expert.view(-1).bool()
+            if not bool(m.any()):
                 return {
                     "loss": 0.0,
                     "skipped_step": 1.0,
@@ -140,21 +138,14 @@ class DiscreteSoftQAgent:
                     "Q_max": 0.0,
                     "policy_entropy": entropy,
                 }
-            q_sa = q_sa[m_expert]
-            v_s = v_s[m_expert]
-            next_v = next_v[m_expert]
-            done = done[m_expert]
-            actions_e = actions[m_expert].view(-1)
-            logits_e = q_all[m_expert]
-            mask_e = mask[m_expert]
-        else:
-            actions_e = actions.view(-1)
-            logits_e = q_all
-            mask_e = mask
+            q_sa = q_sa[m]
+            v_s = v_s[m]
+            next_v = next_v[m]
+            done = done[m]
 
         from iq_learn.iq_loss import iq_learn_loss
 
-        iq_loss, metrics = iq_learn_loss(
+        loss, metrics = iq_learn_loss(
             q_sa=q_sa,
             v_s=v_s,
             next_v=next_v,
@@ -163,11 +154,6 @@ class DiscreteSoftQAgent:
             alpha_reg=self.alpha_reg,
             use_chi=self.use_chi,
         )
-        neg_inf = torch.finfo(q_all.dtype).min
-        bc_loss = F.cross_entropy(logits_e.masked_fill(~mask_e, neg_inf), actions_e)
-        loss = iq_loss + bc_loss
-        metrics["iq_loss"] = float(iq_loss.detach())
-        metrics["bc_loss"] = float(bc_loss.detach())
 
         self.optimizer.zero_grad()
         if torch.isfinite(loss):
