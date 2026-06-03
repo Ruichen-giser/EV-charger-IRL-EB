@@ -40,6 +40,7 @@ class MainConfig:
     alpha: float = 0.01
     alpha_reg: float = 0.5
     use_chi: bool = True
+    iq_loss_mode: str = "online"
     lr: float = 5e-5
     batch_size: int = 64
     train_steps: int = 1_000_000
@@ -88,6 +89,7 @@ def run_main(cfg: MainConfig) -> dict:
             alpha=float(cfg.alpha),
             alpha_reg=float(cfg.alpha_reg),
             use_chi=bool(cfg.use_chi),
+            iq_loss_mode=str(cfg.iq_loss_mode),
             lr=float(cfg.lr),
             batch_size=int(cfg.batch_size),
             train_steps=int(cfg.train_steps),
@@ -136,6 +138,18 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--dropout", type=float, default=CNN_DROPOUT)
+    parser.add_argument(
+        "--iq-loss-mode",
+        type=str,
+        default="online",
+        choices=("online", "offline"),
+        help="online=原文 value+regularize（V/χ² 用专家+策略）；offline=value_expert（仅专家）",
+    )
+    parser.add_argument(
+        "--no-chi",
+        action="store_true",
+        help="关闭 χ² 正则（online 下默认 regularize 覆盖专家+策略）",
+    )
     parser.add_argument("--device", type=str, default="auto", choices=("auto", "cuda", "cpu", "mps"))
     parser.add_argument("--seed", type=int, default=0, help="随机种子（影响训练与 checkpoint 文件名）")
     args = parser.parse_args()
@@ -151,6 +165,8 @@ def main() -> None:
             batch_size=int(args.batch_size),
             lr=float(args.lr),
             dropout=float(args.dropout),
+            iq_loss_mode=str(args.iq_loss_mode),
+            use_chi=not bool(args.no_chi),
             device=str(args.device),
             seed=int(args.seed),
         )

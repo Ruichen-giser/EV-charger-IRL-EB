@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from cnn_config import CNN_DROPOUT, CNN_N_CONV_LAYERS
 from models.simple_grid_cnn import SimpleGridCNN
+from iq_learn.iq_loss import IQ_LOSS_MODES, iq_learn_loss
 from models.soft_q_ops import masked_soft_value, soft_policy_entropy
 
 
@@ -66,6 +67,7 @@ class DiscreteSoftQAgent:
         alpha: float = 0.01,
         alpha_reg: float = 0.5,
         use_chi: bool = True,
+        iq_loss_mode: str = "online",
         target_update_interval: int = 2,
         grid_h: int = 0,
         grid_w: int = 0,
@@ -80,6 +82,10 @@ class DiscreteSoftQAgent:
         self.alpha = float(alpha)
         self.alpha_reg = float(alpha_reg)
         self.use_chi = bool(use_chi)
+        mode = str(iq_loss_mode).strip().lower()
+        if mode not in IQ_LOSS_MODES:
+            raise ValueError(f"iq_loss_mode 须为 {IQ_LOSS_MODES}，当前: {iq_loss_mode!r}")
+        self.iq_loss_mode = mode
         self.target_update_interval = int(target_update_interval)
         self._step = 0
         self.network_type = "SimpleGridCNN"
@@ -126,10 +132,9 @@ class DiscreteSoftQAgent:
             else:
                 q_valid = q_all[mask]
 
-        # IQ-Learn 离线 IRL：损失仅在专家转移上计算（策略 buffer 供探索/扩展，不参与 IQ 目标）
-        if is_expert is not None:
-            m = is_expert.view(-1).bool()
-            if not bool(m.any()):
+        if self.iq_loss_mode == "online":
+            m = is_expert.view(-1).bool() if is_expert is not None else None
+            if m is None or not bool(m.any()):
                 return {
                     "loss": 0.0,
                     "skipped_step": 1.0,
@@ -138,22 +143,28 @@ class DiscreteSoftQAgent:
                     "Q_max": 0.0,
                     "policy_entropy": entropy,
                 }
-            q_sa = q_sa[m]
-            v_s = v_s[m]
-            next_v = next_v[m]
-            done = done[m]
 
-        from iq_learn.iq_loss import iq_learn_loss
-
-        loss, metrics = iq_learn_loss(
-            q_sa=q_sa,
-            v_s=v_s,
-            next_v=next_v,
-            done=done,
-            gamma=self.gamma,
-            alpha_reg=self.alpha_reg,
-            use_chi=self.use_chi,
-        )
+        try:
+            loss, metrics = iq_learn_loss(
+                q_sa=q_sa,
+                v_s=v_s,
+                next_v=next_v,
+                done=done,
+                is_expert=is_expert,
+                gamma=self.gamma,
+                alpha_reg=self.alpha_reg,
+                use_chi=self.use_chi,
+                loss_mode=self.iq_loss_mode,
+            )
+        except ValueError:
+            return {
+                "loss": 0.0,
+                "skipped_step": 1.0,
+                "Q_mean": 0.0,
+                "Q_std": 0.0,
+                "Q_max": 0.0,
+                "policy_entropy": entropy,
+            }
 
         self.optimizer.zero_grad()
         if torch.isfinite(loss):
@@ -229,6 +240,9 @@ class DiscreteSoftQAgent:
                 "target_net": self.target_net.state_dict(),
                 "alpha": self.alpha,
                 "gamma": self.gamma,
+                "iq_loss_mode": self.iq_loss_mode,
+                "use_chi": self.use_chi,
+                "alpha_reg": self.alpha_reg,
                 "grid_h": self.grid_h,
                 "grid_w": self.grid_w,
                 "in_channels": self.in_channels,
@@ -241,3 +255,5 @@ class DiscreteSoftQAgent:
         blob: dict[str, Any] = torch.load(path, map_location=self.device, weights_only=False)
         self.q_net.load_state_dict(blob["q_net"])
         self.target_net.load_state_dict(blob.get("target_net", blob["q_net"]))
+        if "iq_loss_mode" in blob:
+            self.iq_loss_mode = str(blob["iq_loss_mode"])

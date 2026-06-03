@@ -41,6 +41,7 @@ class SingleCountyTrainConfig:
     alpha: float = 0.01
     alpha_reg: float = 0.5
     use_chi: bool = True
+    iq_loss_mode: str = "online"
     lr: float = 5e-5
     batch_size: int = 64
     train_steps: int = 20_000
@@ -69,6 +70,9 @@ def train_single_county(cfg: SingleCountyTrainConfig) -> tuple[DiscreteSoftQAgen
     if len(cfg.grid_npz_paths) != 1:
         raise ValueError("train_single_county 仅支持单县 npz")
 
+    if cfg.iq_loss_mode == "online" and not cfg.use_stratified_buffer:
+        raise ValueError("iq_loss_mode=online 需要 use_stratified_buffer=True（策略 rollout 参与 value/χ² 项）")
+
     channel_cfg = ObsChannelConfig(names=tuple(cfg.obs_channel_names))
     npz_path = str(cfg.grid_npz_paths[0])
 
@@ -83,6 +87,7 @@ def train_single_county(cfg: SingleCountyTrainConfig) -> tuple[DiscreteSoftQAgen
         alpha=float(cfg.alpha),
         alpha_reg=float(cfg.alpha_reg),
         use_chi=bool(cfg.use_chi),
+        iq_loss_mode=str(cfg.iq_loss_mode),
         target_update_interval=int(cfg.target_update_interval),
         grid_h=int(layout.H),
         grid_w=int(layout.W),
@@ -121,10 +126,14 @@ def train_single_county(cfg: SingleCountyTrainConfig) -> tuple[DiscreteSoftQAgen
     metrics_png = out / f"{county_tag}_iq_training_metrics.png"
 
     if cfg.verbose:
+        chi_note = "regularize(专家+策略)" if cfg.iq_loss_mode == "online" and cfg.use_chi else (
+            "expert-only χ²" if cfg.use_chi else "无 χ²"
+        )
         print(
             f"[IQ] {layout.county_name} 专家转移 {len(raw_batch)} 条，"
             f"grid {layout.H}×{layout.W}×{channel_cfg.n_channels}，"
             f"SimpleGridCNN（3×Conv3×3 + 1×1 head，dropout={cfg.dropout}），"
+            f"IQ 模式={cfg.iq_loss_mode}，χ²={chi_note}，"
             f"通道 {channel_cfg.names}",
             flush=True,
         )
@@ -176,7 +185,12 @@ def train_single_county(cfg: SingleCountyTrainConfig) -> tuple[DiscreteSoftQAgen
         "county_name": layout.county_name,
         "seed": int(cfg.seed),
         "mdp_mode": current_mdp_mode(),
-        "method": "IQ-Learn SimpleGridCNN（与 BC 同架构）+ stratified replay",
+        "method": (
+            "IQ-Learn online SimpleGridCNN + stratified replay"
+            if cfg.iq_loss_mode == "online"
+            else "IQ-Learn offline (value_expert) SimpleGridCNN + stratified replay"
+        ),
+        "iq_loss_mode": str(cfg.iq_loss_mode),
         "network": "SimpleGridCNN",
         "dropout": float(cfg.dropout),
         "n_expert_transitions": len(raw_batch),
