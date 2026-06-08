@@ -1,0 +1,13 @@
+# Combined dependencies for the full EV-charger-IRL pipeline.
+# Individual packages also ship requirements.txt under IRL_data/, IRL_BC/, IRL_IQ/.
+
+numpy
+pandas
+geopandas
+shapely
+rasterio
+pyarrow
+joblib
+matplotlib
+torch
+gymnasium
