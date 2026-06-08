@@ -1,88 +1,80 @@
-# EV-charger-IRL
+# EV-charger-IRL-EB
 
-Inverse reinforcement learning for EV charging station deployment on 2 km county grids. The pipeline has three standalone packages:
+**E**ight-county **B**undled training fork：8 县联合 IQ-Learn，共享 SimpleGridCNN + county embedding。
 
-| Package | Role |
-|---------|------|
-| **IRL_data** | Raw GIS/EVCS → prepared pickle + grid feature `.npz` |
-| **IRL_BC** | Behavior cloning (BC) with SimpleGridCNN |
-| **IRL_IQ** | IQ-Learn with the same CNN backbone |
+与 [EV-charger-IRL](https://github.com/)（单县 BC/IQ）分离维护，不破坏原仓库。
 
-## Repository layout
+## 与 EV-charger-IRL 的区别
+
+| | EV-charger-IRL | EV-charger-IRL-EB（本仓库） |
+|--|----------------|----------------------------|
+| 训练范围 | 单县 | **8 县联合** |
+| Q 网络 | 每县独立 | **共享一个 Q** |
+| County 条件 | 无 | **Embedding(16) + 输入层 concat** |
+| Q head | 1×1 spatial conv | 同左（无 GAP） |
+| 入口 | `IRL_IQ/main.py --county X` | `IRL_IQ/main.py`（默认 8 县） |
+
+## 仓库结构
 
 ```text
-EV-charger-IRL/
-├── data/              # raw datasets (see data/README.md)
-├── outputs/           # generated artifacts (gitignored)
-├── IRL_data/          # data preparation
-├── IRL_BC/            # BC training & evaluation
-└── IRL_IQ/            # IQ-Learn training & evaluation
+EV-charger-IRL-EB/
+├── IRL_data/          # 数据准备（与原版相同，8 县 county_names）
+├── IRL_IQ/            # ★ 联合训练（已改写）
+│   ├── main.py
+│   └── iq_learn/
+│       ├── grid_align.py      # 画布 padding / 动作对齐
+│       ├── expert_data.py     # 单县收集 + 多县 pool
+│       ├── train_joint.py     # 联合训练循环
+│       └── ...
+└── outputs/
+    └── iq_output/joint_8counties/
 ```
+
+`IRL_BC/` 仍保留（单县 BC baseline），联合 IQ 请只用 `IRL_IQ/`。
 
 ## Quick start
 
-### 1. Install dependencies
-
-Each package has its own `requirements.txt`. For the full pipeline:
-
-```bash
-pip install -r IRL_data/requirements.txt
-pip install -r IRL_BC/requirements.txt
-# IRL_IQ uses the same deps as IRL_BC
-```
-
-Or install everything at once:
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Prepare data
-
-Put raw files under `data/` (see [data/README.md](data/README.md)), then from the repo root:
+### 1. 数据
 
 ```bash
 cd IRL_data
-python main.py
+python main.py   # 生成 8 县 grid_tensors
 ```
 
-Outputs:
-
-- `outputs/prepared_data/prepared_irl_dataset.pkl`
-- `outputs/prepared_data/grid_tensors/<County>_grid_features.npz`
-
-### 3. Train IRL models
-
-Behavior cloning:
-
-```bash
-cd IRL_BC
-python main.py --county Los_Angeles
-```
-
-IQ-Learn:
+### 2. 联合训练
 
 ```bash
 cd IRL_IQ
-python main.py --county Los_Angeles
+pip install -r requirements.txt
+python main.py
 ```
 
-Both trainers read grid tensors from `outputs/prepared_data/grid_tensors/` by default and write checkpoints to `outputs/bc_output/` or `outputs/iq_output/`.
-
-### MDP modes
-
-Use `--mdp-mode legacy` (default) or `--mdp-mode repeat`. See package READMEs for details.
-
-## Optional utilities
+可选参数：
 
 ```bash
-# Feature distribution plots
-python IRL_data/feature_statistics.py
-
-# Expert first-step visualization (BC package)
-python IRL_BC/scripts/visualize_expert_first_step.py
+python main.py --train-steps 50000 --eval-every 200 --county-embed-dim 16 --device cuda
+python main.py --counties Siskiyou,Modoc,Shasta,Lassen   # 自定义县列表
 ```
 
-## Citation
+### 3. 输出
 
-If you use this code, please cite the associated paper (link TBD).
+- `outputs/iq_output/joint_8counties/iq_learn_shared.pt` — 最终共享 Q
+- `outputs/iq_output/joint_8counties/iq_learn_shared_best.pt` — 验证最优
+- `outputs/iq_output/joint_8counties/iq_learn_summary.json` — 含各县 `per_county_final`
+
+## 训练流程（逻辑）
+
+```text
+8 县 cropped npz
+  → 各县 collect 专家 (s,a,s')
+  → pool：pad 到 max(H×W)，打 county_id
+  → StratifiedReplayBuffer（专家 + 8 县随机 policy rollout）
+  → SimpleGridCNN：obs + Embedding 广播 concat → Conv → 1×1 Q head
+  → IQ-Learn loss → 共享 Q 更新
+```
+
+## 默认 8 县
+
+Siskiyou, Modoc, Shasta, Lassen, Los_Angeles, Sacramento, San_Diego, Kern
+
+（在 `IRL_IQ/cnn_config.py` 的 `TRAINING_COUNTIES` 中修改）

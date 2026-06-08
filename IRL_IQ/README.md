@@ -1,36 +1,28 @@
-# IRL_IQ
+# IRL_IQ-EB — 8 县联合 IQ-Learn
 
-IQ-Learn + SimpleGridCNN（网络与 IRL_BC 一致）。独立包，仅依赖 `IRL_data` 生成的网格 npz。
+SimpleGridCNN + county embedding（输入层 concat）+ 1×1 spatial Q head。
 
-## 数据
-
-同 IRL_BC：默认读取 `outputs/prepared_data/grid_tensors/<县名>_grid_features.npz`。
-
-## MDP 模式（默认 **legacy**，与 IRL_BC 相同）
-
-```bash
-python main.py
-python main.py --mdp-mode repeat
-```
-
-## 安装与运行
+## 运行
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-默认输出：`outputs/iq_output/los_angeles/`
+默认读取 `outputs/prepared_data/grid_tensors/` 下 8 县 npz，输出到 `outputs/iq_output/joint_8counties/`。
 
-训练结束保存权重：`IRL_IQ_YYYYMMDD_seed{N}.pt`
+## 核心模块
 
-评估：`expert roll-in`（teacher forcing）与 `policy rollout`（closed-loop）；环境 `max_steps` 与专家轨迹步数一致（`expert_action_sequence` 长度）。指标含 match、top10、MRR、Jaccard、Hausdorff、Chamfer、LCSS。
-
-## 目录说明
-
-| 路径 | 作用 |
+| 文件 | 作用 |
 |------|------|
-| `main.py` | 入口 |
-| `envs/` | 建站 MDP + 多通道观测包装 |
-| `iq_learn/` | IQ-Learn 训练 |
-| `models/` | SimpleGridCNN |
+| `main.py` | CLI 入口 |
+| `iq_learn/train_joint.py` | 联合训练主循环 |
+| `iq_learn/expert_data.py` | 单县收集 + `merge_county_expert_batches`（pool） |
+| `iq_learn/grid_align.py` | 统一画布 padding、动作 index 对齐 |
+| `iq_learn/policy_rollout.py` | 8 县随机 rollout → 策略 buffer |
+| `iq_learn/evaluate.py` | 画布对齐下的逐县评估 |
+| `models/simple_grid_cnn.py` | Conv encoder + embedding concat + 1×1 Q |
+
+## 配置
+
+`cnn_config.py`：`TRAINING_COUNTIES`、`COUNTY_EMBED_DIM=16`

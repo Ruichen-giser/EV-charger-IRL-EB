@@ -10,7 +10,7 @@ REPO_ROOT = PACKAGE_DIR.parent
 
 OUTPUTS_DIR = REPO_ROOT / "outputs"
 DEFAULT_GRID_NPZ_DIR = OUTPUTS_DIR / "prepared_data" / "grid_tensors"
-DEFAULT_IQ_OUTPUT_DIR = OUTPUTS_DIR / "iq_output" / "los_angeles"
+DEFAULT_IQ_OUTPUT_DIR = OUTPUTS_DIR / "iq_output" / "joint_8counties"
 
 
 def add_package_to_path() -> Path:

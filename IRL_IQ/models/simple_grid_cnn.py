@@ -1,4 +1,4 @@
-"""SimpleGridCNN：3×Conv3×3 + Dropout + 1×1 head（无残差）。"""
+"""SimpleGridCNN：3×Conv3×3 + 1×1 spatial Q head；可选 county embedding（输入层 concat）。"""
 from __future__ import annotations
 
 import torch
@@ -22,6 +22,11 @@ def infer_simple_grid_cnn_arch(state_dict: dict[str, torch.Tensor]) -> tuple[int
 
 
 class SimpleGridCNN(nn.Module):
+    """
+    输入 (B, C_obs, H, W)；若启用 embedding，内部 concat (B, C_obs+D, H, W) 再进 encoder。
+    输出 (B, H*W) Q 值（1×1 conv spatial head，无 GAP）。
+    """
+
     def __init__(
         self,
         in_channels: int = 8,
@@ -31,6 +36,8 @@ class SimpleGridCNN(nn.Module):
         *,
         n_conv_layers: int = 3,
         dropout: float = 0.1,
+        n_counties: int = 0,
+        county_embed_dim: int = 0,
     ) -> None:
         super().__init__()
         self.grid_h = int(grid_h)
@@ -38,10 +45,20 @@ class SimpleGridCNN(nn.Module):
         self.action_dim = int(action_dim)
         self.n_conv_layers = int(n_conv_layers)
         self.dropout = float(dropout)
+        self.base_in_channels = int(in_channels)
+        self.n_counties = int(n_counties)
+        self.county_embed_dim = int(county_embed_dim)
+
+        if self.n_counties > 0 and self.county_embed_dim > 0:
+            self.county_embed = nn.Embedding(self.n_counties, self.county_embed_dim)
+            conv_in = self.base_in_channels + self.county_embed_dim
+        else:
+            self.county_embed = None
+            conv_in = self.base_in_channels
 
         widths = [32, 64, 64][: self.n_conv_layers]
         layers: list[nn.Module] = []
-        c_in = int(in_channels)
+        c_in = conv_in
         for c_out in widths:
             layers.extend(
                 [
@@ -66,6 +83,8 @@ class SimpleGridCNN(nn.Module):
         grid_h: int,
         grid_w: int,
         action_dim: int,
+        n_counties: int = 0,
+        county_embed_dim: int = 0,
     ) -> "SimpleGridCNN":
         n_layers, dropout = infer_simple_grid_cnn_arch(state_dict)
         return cls(
@@ -75,9 +94,26 @@ class SimpleGridCNN(nn.Module):
             action_dim,
             n_conv_layers=n_layers,
             dropout=dropout,
+            n_counties=n_counties,
+            county_embed_dim=county_embed_dim,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _concat_county_planes(
+        self,
+        obs: torch.Tensor,
+        county_ids: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if self.county_embed is None:
+            return obs
+        if county_ids is None:
+            raise ValueError("county embedding 已启用，forward 需要 county_ids")
+        b, _, h, w = obs.shape
+        emb = self.county_embed(county_ids.long().view(-1))
+        planes = emb.view(b, self.county_embed_dim, 1, 1).expand(b, self.county_embed_dim, h, w)
+        return torch.cat([obs, planes], dim=1)
+
+    def forward(self, obs: torch.Tensor, county_ids: torch.Tensor | None = None) -> torch.Tensor:
+        x = self._concat_county_planes(obs, county_ids)
         b = x.shape[0]
         feat = self.encoder(x)
         logits = self.head(feat).squeeze(1)
