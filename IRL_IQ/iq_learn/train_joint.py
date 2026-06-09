@@ -19,6 +19,7 @@ from cnn_config import (
 )
 from iq_learn.discrete_soft_q import DiscreteSoftQAgent
 from iq_learn.evaluate import evaluate_joint_all
+from iq_learn.metrics import aggregate_joint_eval_metrics, build_joint_final_eval, format_eval_log
 from iq_learn.expert_data import build_merged_expert_dataset
 from iq_learn.plotting import plot_iq_metrics
 from iq_learn.policy_rollout import JointPolicyRolloutPool, warm_start_joint_policy_buffer
@@ -158,35 +159,22 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
             continue
 
         per_county, agg = evaluate_joint_all(agent, counties, canvas, channel_cfg)
+        # 环境评估：expert_rollin + policy_rollout（与 EV-charger-IRL metrics_log 键对齐）
         row: dict[str, Any] = {
             "step": step,
-            "mean_expert_match_rate": agg["mean_expert_match_rate"],
-            "mean_distance_km": agg["mean_distance_km"],
             "Q_mean": m["Q_mean"],
             "Q_std": m["Q_std"],
+            "Q_max": m["Q_max"],
+            "policy_entropy": m["policy_entropy"],
             "loss": m["loss"],
-            "per_county": [
-                {
-                    "county_name": p["county_name"],
-                    "expert_rollin_expert_greedy_match_rate": p["expert_rollin_expert_greedy_match_rate"],
-                    "expert_rollin_mean_distance_km": p["expert_rollin_mean_distance_km"],
-                }
-                for p in per_county
-            ],
+            **aggregate_joint_eval_metrics(per_county),
         }
-        # 跨县平均，供 plot_iq_metrics 绘制
-        for prefix in ("expert_rollin_", "policy_rollout_"):
-            keys = {k[len(prefix) :] for k in per_county[0] if k.startswith(prefix)}
-            for short in keys:
-                full = f"{prefix}{short}"
-                vals = [float(p.get(full, 0.0)) for p in per_county]
-                row[full] = float(np.mean(vals)) if vals else 0.0
         metrics_log.append(row)
 
         if cfg.verbose:
             print(
-                f"step {step}: match={agg['mean_expert_match_rate']:.3f} "
-                f"dist_km={agg['mean_distance_km']:.2f} loss={m['loss']:.3f}",
+                f"step {step}: Q_mean={m['Q_mean']:.3f}, loss={m['loss']:.3f} | "
+                f"{format_eval_log(row)}",
                 flush=True,
             )
 
@@ -203,13 +191,10 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         agent.q_net.load_state_dict(best_state)
         agent.target_net.load_state_dict(best_state)
 
-    per_final, agg_final = evaluate_joint_all(agent, counties, canvas, channel_cfg)
+    per_final, _agg_final = evaluate_joint_all(agent, counties, canvas, channel_cfg)
+    final_ev = build_joint_final_eval(per_final)
     if cfg.verbose:
-        print(
-            f"[EB-IQ] final match={agg_final['mean_expert_match_rate']:.3f} "
-            f"dist_km={agg_final['mean_distance_km']:.2f}",
-            flush=True,
-        )
+        print(f"[EB-IQ] final eval | {format_eval_log(final_ev)}", flush=True)
 
     if PLOT_EVAL_METRICS_AT_END and metrics_log:
         plot_iq_metrics(
@@ -233,10 +218,20 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         "eval_every": eval_every,
         "best_mean_expert_match_rate": best_match,
         "best_mean_distance_km": best_dist,
-        "final_mean_expert_match_rate": agg_final["mean_expert_match_rate"],
-        "final_mean_distance_km": agg_final["mean_distance_km"],
-        "per_county_final": per_final,
+        "best_policy_checkpoint": str(out / "iq_learn_shared_best.pt"),
         "metrics_log": metrics_log,
+        "final_eval": final_ev,
+        "mean_expert_match_rate": final_ev["expert_rollin_expert_greedy_match_rate"],
+        "top10_accuracy": final_ev["expert_rollin_top10_accuracy"],
+        "mean_reciprocal_rank": final_ev["expert_rollin_mean_reciprocal_rank"],
+        "mean_distance_km": final_ev["expert_rollin_mean_distance_km"],
+        "final_eval_expert_rollin": {
+            k: final_ev[k] for k in final_ev if str(k).startswith("expert_rollin_")
+        },
+        "final_eval_policy_rollout": {
+            k: final_ev[k] for k in final_ev if str(k).startswith("policy_rollout_")
+        },
+        "per_county_final": per_final,
         "metrics_plot": str(metrics_png) if PLOT_EVAL_METRICS_AT_END else "",
     }
     return agent, summary

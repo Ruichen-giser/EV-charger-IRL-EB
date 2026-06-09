@@ -85,6 +85,29 @@ def eval_metrics_for_log(ev: dict[str, Any]) -> dict[str, float]:
     return row
 
 
+def aggregate_joint_eval_metrics(per_county: list[dict[str, Any]]) -> dict[str, float]:
+    """跨县平均环境评估指标（供 joint metrics_log / plotting）。"""
+    row: dict[str, float] = {}
+    for prefix, shorts in (
+        ("expert_rollin_", EXPERT_ROLLIN_CORE_KEYS),
+        ("policy_rollout_", POLICY_ROLLOUT_CORE_KEYS + POLICY_ROLLOUT_LCSS_KEYS),
+    ):
+        for short in shorts:
+            full = f"{prefix}{short}"
+            vals = [float(p.get(full, 0.0)) for p in per_county]
+            row[full] = float(np.mean(vals)) if vals else 0.0
+    return row
+
+
+def build_joint_final_eval(per_county: list[dict[str, Any]]) -> dict[str, Any]:
+    """跨县平均最终评估 dict（键格式与 EV-charger-IRL evaluate_iq_all 输出一致）。"""
+    return {
+        **aggregate_joint_eval_metrics(per_county),
+        "expert_rollin_eval_mode": "expert_rollin",
+        "policy_rollout_eval_mode": "policy_rollout",
+    }
+
+
 def action_centers_km(layout: CountyLayout, actions: list[int] | np.ndarray) -> np.ndarray:
     pts = []
     for a in actions:

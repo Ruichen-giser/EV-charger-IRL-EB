@@ -96,8 +96,8 @@ def run_main(cfg: MainConfig) -> dict:
         )
     )
     print(
-        f"[EB-IQ] 联合训练完成 match={summary['final_mean_expert_match_rate']:.3f} "
-        f"dist_km={summary['final_mean_distance_km']:.2f} "
+        f"[EB-IQ] 联合训练完成 match={summary['mean_expert_match_rate']:.3f} "
+        f"dist_km={summary['mean_distance_km']:.2f} "
         f"ckpt={summary.get('policy_checkpoint', '')} → {out}",
         flush=True,
     )
