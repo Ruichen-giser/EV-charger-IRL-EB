@@ -15,12 +15,8 @@ GRID_FEATURE_PCT_COLS = (
     "fuel_station_count_pct",
 )
 
-# 1 km → 2 km 聚合时对下列列取均值
+# 1 km → target km 聚合时仅对栅格特征取均值；POI/公路/加油站在 target 格网上重算
 GRID_AGG_MEAN_COLS = (
     "population_raw",
     "gdp_raw",
-    "poi_entropy_raw",
-    "highway_dist_m",
-    "fuel_station_count_raw",
-    *GRID_FEATURE_PCT_COLS,
 )

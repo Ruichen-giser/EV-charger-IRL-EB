@@ -23,8 +23,13 @@ except ImportError:
     Parallel = None  # type: ignore
     delayed = None  # type: ignore
 
-from geo import filter_events_within_county, load_county_gdf
-from gis_align import attach_fuel_station_counts, build_county_grid_1km, raster_file_info
+from geo import county_union_geometry, filter_events_within_county, load_county_gdf
+from gis_align import (
+    attach_fuel_station_counts,
+    attach_highway_and_poi_to_grids,
+    build_county_grid_1km,
+    raster_file_info,
+)
 from grid_ops import (
     GridSystem,
     add_missing_grid_cells,
@@ -92,6 +97,7 @@ def cache_key_for_county_dataset(
         "grid_subsample_mod": int(grid_subsample_mod),
         "prune_zero_activity_grids": bool(prune_zero_activity_grids),
         "grid_cell_km": int(grid_cell_km),
+        "feature_aggregation": "raster_mean_at_target;vector_at_target_cell",
         "fuel_station_label": FUEL_STATION_LABEL,
         "files": {
             "pkl": _file_signature(pkl_path),
@@ -231,11 +237,10 @@ def prepare_county_dataset(
         gdp_band_1based=gdp_band_1based,
         poi_geoparquet_path=poi_geoparquet_path,
         highway_geojson_path=highway_geojson_path,
-        poi_by_cell=poi_1km,
     )
     grids_1km = normalize_county_feature_percentiles(grids_1km)
 
-    # --- 3. 聚合到 target_cell_km（默认 2 km），事件同步赋格 ---
+    # --- 3. 聚合到 target_cell_km（默认 2 km）：栅格取均值，矢量在 target 格网重算 ---
     grid_target = GridSystem(
         lon_min=grid_1km.lon_min,
         lat_min=grid_1km.lat_min,
@@ -247,10 +252,22 @@ def prepare_county_dataset(
     grids = grid_target.aggregate_base_to_target(grids_1km)
     events = grid_target.assign_events(events)
 
-    poi_target = {
-        str(gid): float(v)
-        for gid, v in zip(grids["grid_id"].astype(str), grids.get("poi_entropy_raw", pd.Series(0.0)))
-    }
+    county_geom = county_union_geometry(usa_map_path, state_name, county_name)
+    poi_bbox = (
+        bounds[0] - 0.02,
+        bounds[1] - 0.02,
+        bounds[2] + 0.02,
+        bounds[3] + 0.02,
+    )
+    grids, _ = attach_highway_and_poi_to_grids(
+        grids,
+        grid_target,
+        poi_geoparquet_path,
+        highway_geojson_path,
+        county_geom,
+        poi_bbox,
+    )
+    grids = attach_fuel_station_counts(grids, poi_geoparquet_path, grid_target, tuple(bounds))
     grids = add_missing_grid_cells(
         grids,
         events,
@@ -263,7 +280,6 @@ def prepare_county_dataset(
         gdp_band_1based=gdp_band_1based,
         poi_geoparquet_path=poi_geoparquet_path,
         highway_geojson_path=highway_geojson_path,
-        poi_by_cell=poi_target,
     )
     grids = normalize_county_feature_percentiles(grids)
 
@@ -301,7 +317,6 @@ def prepare_county_dataset(
             gdp_band_1based=gdp_band_1based,
             poi_geoparquet_path=poi_geoparquet_path,
             highway_geojson_path=highway_geojson_path,
-            poi_by_cell=poi_target,
         )
         grids = normalize_county_feature_percentiles(grids)
 

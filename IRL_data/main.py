@@ -69,7 +69,7 @@ class DataConfig:
     output_pkl: str = field(default_factory=lambda: str(DEFAULT_PREPARED_DATA_PKL))
     cache_dir: str | None = field(default_factory=lambda: str(DEFAULT_CACHE_DIR))
     enable_gis_cache: bool = True
-    county_data_workers: int = 1
+    county_data_workers: int = 8
 
     grid_cell_km: int = 2
     grid_subsample_mod: int = 1

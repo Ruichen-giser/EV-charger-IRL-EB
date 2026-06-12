@@ -14,7 +14,7 @@ python main.py
 │ 步骤 1  导入原始 GIS/EVCS，构建 2 km 网格特征（按县内部执行）   │
 │   geo          县界、事件落在县内                             │
 │   gis_align    栅格 WorldPOP(2020)/GDP + 矢量 POI(2024)/公路/加油站 → 1km │
-│   grid_ops     1→2km 聚合、县内归一化、补缺格                 │
+│   grid_ops     1→2km：人口/GDP 取均值；POI/公路/加油站 target 格重算 │
 ├─────────────────────────────────────────────────────────────┤
 │ 步骤 2  按 county 切分                                        │
 │   county_prepare   多县并行；每县 → events + grids 表         │
@@ -33,7 +33,7 @@ python main.py
 | `county_prepare.py` | 2 | 单县编排；`load_evcs_events` |
 | `geo.py` | 1a | 县界 GeoJSON、空间筛选 |
 | `gis_align.py` | 1b | 栅格/矢量对齐；`build_county_grid_1km` |
-| `grid_ops.py` | 1c | `GridSystem`、2 km 聚合、归一化、裁剪 |
+| `grid_ops.py` | 1c | `GridSystem`、栅格聚合、归一化、裁剪 |
 | `grid_tensor.py` | 3 | 稀疏表 → `(H,W,5)` + `expert_actions` |
 | `feature_statistics.py` | — | 网格/建站格特征分布柱状图 |
 | `paths.py` | — | 输出路径 |

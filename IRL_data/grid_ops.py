@@ -170,16 +170,26 @@ def add_missing_grid_cells(
     gdp_band_1based: int,
     poi_geoparquet_path: Path,
     highway_geojson_path: Path,
-    poi_by_cell: dict[str, float],
+    poi_bbox_pad_deg: float = 0.02,
 ) -> pd.DataFrame:
-    from gis_align import nearest_line_distance_m, read_highways_near_geometry, sample_raster_at_lonlat
+    from gis_align import (
+        attach_fuel_station_counts,
+        attach_highway_and_poi_to_grids,
+        sample_raster_at_lonlat,
+    )
 
     missing = sorted(set(events["grid_id"].astype(str)) - set(grids["grid_id"].astype(str)))
     if not missing:
         return grids
 
     county_geom = county_union_geometry(usa_map_path, state_name, county_name)
-    highways = read_highways_near_geometry(highway_geojson_path, county_geom)
+    minx, miny, maxx, maxy = county_geom.bounds
+    poi_bbox = (
+        minx - poi_bbox_pad_deg,
+        miny - poi_bbox_pad_deg,
+        maxx + poi_bbox_pad_deg,
+        maxy + poi_bbox_pad_deg,
+    )
     cell_km = max(1, int(grid.target_cell_km))
     new_rows: list[dict] = []
 
@@ -196,7 +206,6 @@ def add_missing_grid_cells(
                     gdp_tif_path, np.array([lon]), np.array([lat]), band_index_1based=gdp_band_1based
                 )[0]
             )
-            hdist = float(nearest_line_distance_m(np.array([lon]), np.array([lat]), highways)[0])
             new_rows.append(
                 {
                     "grid_x": gx,
@@ -204,12 +213,22 @@ def add_missing_grid_cells(
                     "grid_id": gid,
                     "population_raw": pop,
                     "gdp_raw": gdp,
-                    "poi_entropy_raw": float(poi_by_cell.get(gid, 0.0)),
-                    "highway_dist_m": hdist if np.isfinite(hdist) else np.nan,
-                    "fuel_station_count_raw": 0.0,
                 }
             )
-    return pd.concat([grids, pd.DataFrame(new_rows)], ignore_index=True)
+
+    new_df = pd.DataFrame(new_rows)
+    new_df, _ = attach_highway_and_poi_to_grids(
+        new_df,
+        grid,
+        poi_geoparquet_path,
+        highway_geojson_path,
+        county_geom,
+        poi_bbox,
+    )
+    new_df = attach_fuel_station_counts(
+        new_df, poi_geoparquet_path, grid, (minx, miny, maxx, maxy), pad_deg=poi_bbox_pad_deg
+    )
+    return pd.concat([grids, new_df], ignore_index=True)
 
 
 def prune_grids_zero_non_highway_keep_stations(

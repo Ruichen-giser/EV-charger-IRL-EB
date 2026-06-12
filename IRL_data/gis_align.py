@@ -132,7 +132,7 @@ def poi_category_entropy_by_cell(
         ]
     if pois.empty:
         return {}
-    gx, gy = grid.cell_index_1km(
+    gx, gy = grid.cell_index_target(
         pois["longitude"].to_numpy(dtype=float),
         pois["latitude"].to_numpy(dtype=float),
     )
@@ -190,7 +190,7 @@ def fuel_station_counts_by_cell(
     pois = pois.loc[mask]
     if pois.empty:
         return {}
-    gx, gy = grid.cell_index_1km(
+    gx, gy = grid.cell_index_target(
         pois["longitude"].to_numpy(dtype=float),
         pois["latitude"].to_numpy(dtype=float),
     )
@@ -207,8 +207,13 @@ def attach_highway_and_poi_to_grids(
     county_geom_wgs84,
     poi_bbox_wgs84: tuple[float, float, float, float],
 ) -> tuple[pd.DataFrame, dict[str, float]]:
-    lons = grid.cell_centers_lon(grids["grid_x"].to_numpy(int), grids["grid_y"].to_numpy(int))
-    lats = grid.cell_centers_lat(grids["grid_x"].to_numpy(int), grids["grid_y"].to_numpy(int))
+    cell_km = max(1, int(grid.target_cell_km))
+    lons = grid.cell_centers_lon(
+        grids["grid_x"].to_numpy(int), grids["grid_y"].to_numpy(int), cell_km=cell_km
+    )
+    lats = grid.cell_centers_lat(
+        grids["grid_x"].to_numpy(int), grids["grid_y"].to_numpy(int), cell_km=cell_km
+    )
     poi_map = poi_category_entropy_by_cell(poi_geoparquet_path, grid, poi_bbox_wgs84)
     highways = read_highways_near_geometry(highway_geojson_path, county_geom_wgs84)
     out = grids.copy()
