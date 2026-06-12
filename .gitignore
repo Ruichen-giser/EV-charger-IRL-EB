@@ -21,6 +21,7 @@ outputs/*
 # Large raw/processed data (provide your own under data/)
 data/*
 !data/README.md
+!data/us_mdp_ge5_state_county_list.xlsx
 
 # Model checkpoints and training artifacts
 *.pt

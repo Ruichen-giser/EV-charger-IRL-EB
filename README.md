@@ -73,7 +73,7 @@ python main.py --train-steps 50000 --device cuda
 ```text
 MDP≥5 县 cropped npz
   → 各县 collect 专家 (s,a,s')
-  → pool：pad 到 max(H×W)，打 state_id / county_id / county_meta
+  → pool：pad 到 max(H×W)，打 state_id / county_id / county_meta（geojson 三维社会经济）
   → offline IQ：仅专家 buffer 采样（默认）
   → SimpleGridCNN：obs + location embed 广播 concat → Conv → 1×1 Q head
   → IQ-Learn loss → 共享 Q 更新

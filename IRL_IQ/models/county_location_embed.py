@@ -8,7 +8,7 @@ import torch.nn as nn
 class CountyLocationEmbed(nn.Module):
     """
     state_id → StateEmbed(51×d)
-    county_meta(5) → MLP(5→32→d)
+    county_meta(3) → MLP(3→32→d)  # 受教育程度、人口、家庭收入
     e_base = LayerNorm(Dropout(e_state + e_meta))
     e = e_base + α * ResidualEmbed(county_id)   （默认 α=0）
     """
@@ -18,7 +18,7 @@ class CountyLocationEmbed(nn.Module):
         *,
         n_states: int = 51,
         embed_dim: int = 16,
-        meta_dim: int = 5,
+        meta_dim: int = 3,
         meta_hidden: int = 32,
         n_residual: int = 1149,
         residual_alpha: float = 0.0,

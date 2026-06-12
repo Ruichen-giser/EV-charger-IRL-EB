@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
+from county_meta import COUNTY_META_DIM
+
 
 @dataclass
 class Transition:
@@ -109,7 +111,9 @@ class StratifiedReplayBuffer:
         state_ids = np.asarray([p.state_id for p in picks], dtype=np.int64)
         county_meta = np.stack(
             [
-                p.county_meta if p.county_meta is not None else np.zeros(5, dtype=np.float32)
+                p.county_meta
+                if p.county_meta is not None
+                else np.zeros(COUNTY_META_DIM, dtype=np.float32)
                 for p in picks
             ]
         )

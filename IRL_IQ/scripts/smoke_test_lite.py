@@ -62,8 +62,13 @@ CKPT_REQUIRED_KEYS = {
     "in_channels",
     "n_actions",
     "n_counties",
-    "county_embed_dim",
+    "embed_dim",
+    "meta_dim",
+    "n_states",
+    "n_residual",
+    "residual_alpha",
     "county_names",
+    "location_labels",
 }
 
 
@@ -219,8 +224,8 @@ def _test_checkpoint_save_keys() -> None:
     missing = CKPT_REQUIRED_KEYS - save_keys
     if missing:
         raise AssertionError(f"DiscreteSoftQAgent.save() 缺少字段: {sorted(missing)}")
-    if "SimpleGridCNN+CountyEmbed" not in save_keys:
-        raise AssertionError("checkpoint network 标识应为 SimpleGridCNN+CountyEmbed")
+    if "embed_dim" not in save_keys or "meta_dim" not in save_keys:
+        raise AssertionError("checkpoint 应包含 embed_dim / meta_dim（CountyLocationEmbed）")
     print("[lite] checkpoint 字段定义 OK（未实际写 .pt 文件）")
 
 

@@ -11,6 +11,7 @@ REPO_ROOT = PACKAGE_DIR.parent
 OUTPUTS_DIR = REPO_ROOT / "outputs"
 DEFAULT_GRID_NPZ_DIR = OUTPUTS_DIR / "prepared_data" / "grid_tensors"
 DEFAULT_MDP_GE5_XLSX = REPO_ROOT / "data" / "us_mdp_ge5_state_county_list.xlsx"
+DEFAULT_JOINT_USA_MAP_GEOJSON = REPO_ROOT / "data" / "joint_usa_map.geojson"
 DEFAULT_IQ_OUTPUT_DIR = OUTPUTS_DIR / "iq_output" / "joint_mdp_ge5"
 
 

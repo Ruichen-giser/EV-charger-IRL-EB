@@ -41,6 +41,7 @@ from cnn_config import (  # noqa: E402
 )
 from data_prep import prepare_state_counties_npz  # noqa: E402
 from iq_learn.train_joint import JointTrainConfig, run_joint_training  # noqa: E402
+from county_meta import validate_socioeconomic_coverage  # noqa: E402
 from state_county import (  # noqa: E402
     StateCountyPair,
     filter_pairs_with_grid_npz,
@@ -100,9 +101,15 @@ def run_main(cfg: MainConfig) -> dict:
     if not pairs:
         raise ValueError("state_counties 为空，请检查县清单配置")
 
+    validate_socioeconomic_coverage(pairs)
     npz_paths = prepare_state_counties_npz(grid_dir, pairs, log_prefix="EB-IQ")
     out = Path(cfg.output_dir)
     mdp_xlsx = str(cfg.mdp_ge5_xlsx).strip() or str(DEFAULT_MDP_GE5_XLSX)
+
+    expert_frac = float(cfg.expert_batch_fraction)
+    if str(cfg.iq_loss_mode).strip().lower() == "online" and expert_frac >= 1.0:
+        expert_frac = 0.5
+        print("[EB-IQ] iq_loss_mode=online：expert_batch_fraction 自动设为 0.5", flush=True)
 
     summary = run_joint_training(
         JointTrainConfig(
@@ -133,7 +140,7 @@ def run_main(cfg: MainConfig) -> dict:
             residual_alpha=float(cfg.residual_alpha),
             embed_dropout=float(cfg.embed_dropout),
             obs_channel_names=tuple(cfg.obs_channel_names),
-            expert_batch_fraction=float(cfg.expert_batch_fraction),
+            expert_batch_fraction=expert_frac,
             policy_buffer_capacity=int(cfg.policy_buffer_capacity),
             policy_warmup_transitions=int(cfg.policy_warmup_transitions),
             verbose=int(cfg.verbose),

@@ -12,7 +12,7 @@ _PKG_ROOT = Path(__file__).resolve().parents[1]
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
-from cnn_config import DEFAULT_OBS_CHANNEL_NAMES  # noqa: E402
+from cnn_config import COUNTY_META_DIM, DEFAULT_OBS_CHANNEL_NAMES  # noqa: E402
 from iq_learn.discrete_soft_q import DiscreteSoftQAgent  # noqa: E402
 from iq_learn.evaluate import evaluate_joint_all  # noqa: E402
 from iq_learn.expert_data import CountyLayout  # noqa: E402
@@ -117,8 +117,8 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="eb_iq_smoke_") as tmp:
         tmp_path = Path(tmp)
         specs = [
-            ("Smoke_A", 4, 5, [0, 1, 6, 11]),
-            ("Smoke_B", 3, 6, [0, 7, 13]),
+            ("Siskiyou", 4, 5, [0, 1, 6, 11]),
+            ("Kern", 3, 6, [0, 7, 13]),
         ]
         counties: list[CountyLayout] = []
         for cid, (name, h, w, actions) in enumerate(specs):
@@ -131,7 +131,7 @@ def main() -> None:
                 w=w,
                 expert_actions=actions,
             )
-            from county_meta import compute_county_meta_from_npz, state_name_to_id
+            from county_meta import compute_county_meta, state_name_to_id
 
             counties.append(
                 CountyLayout(
@@ -144,7 +144,7 @@ def main() -> None:
                     W=w,
                     cell_km=2.0,
                     n_obs_channels=channel_cfg.n_channels,
-                    county_meta=compute_county_meta_from_npz(npz),
+                    county_meta=compute_county_meta("California", name),
                 )
             )
 
@@ -158,7 +158,7 @@ def main() -> None:
             in_channels=int(channel_cfg.n_channels),
             n_counties=len(counties),
             embed_dim=8,
-            meta_dim=5,
+            meta_dim=COUNTY_META_DIM,
             n_states=51,
             n_residual=1149,
             residual_alpha=0.0,
@@ -228,7 +228,7 @@ def main() -> None:
             in_channels=int(channel_cfg.n_channels),
             n_counties=len(counties),
             embed_dim=8,
-            meta_dim=5,
+            meta_dim=COUNTY_META_DIM,
             n_states=51,
             n_residual=1149,
             residual_alpha=0.0,

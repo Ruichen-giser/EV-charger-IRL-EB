@@ -20,7 +20,7 @@ from iq_learn.grid_align import (
     pad_mask_flat,
     pad_obs_hwc,
 )
-from county_meta import compute_county_meta_from_npz, state_name_to_id
+from county_meta import compute_county_meta, state_name_to_id
 from obs_channels import DEFAULT_OBS_CHANNELS, ObsChannelConfig
 
 
@@ -55,7 +55,7 @@ class CountyLayout:
     W: int
     cell_km: float
     n_obs_channels: int
-    county_meta: np.ndarray | None = None  # (5,) float32
+    county_meta: np.ndarray | None = None  # (3,) float32 socioeconomic
     flat_grid_w: int | None = None  # 联合训练画布宽；None 表示用本地 W
 
     @property
@@ -184,13 +184,15 @@ def collect_county_expert_batch(
     if not obs_list:
         raise ValueError(f"无有效专家转移: {grid_npz}")
 
-    meta_vec = compute_county_meta_from_npz(grid_npz)
     if state_id is not None:
         sid = int(state_id)
     elif base.state_name:
         sid = state_name_to_id(base.state_name)
     else:
         raise ValueError(f"无法确定 state_id: npz 缺少 state_name ({grid_npz})")
+    if not base.state_name or not base.county_name:
+        raise ValueError(f"无法确定 socioeconomic county_meta: npz 缺少 state/county ({grid_npz})")
+    meta_vec = compute_county_meta(base.state_name, base.county_name)
     layout = CountyLayout(
         county_id=int(county_id),
         state_id=sid,
@@ -242,7 +244,7 @@ def merge_county_expert_batches(
         meta_vec = (
             layout.county_meta
             if layout.county_meta is not None
-            else compute_county_meta_from_npz(layout.grid_npz)
+            else compute_county_meta(layout.state_name, layout.county_name)
         )
         n = int(batch.obs.shape[0])
         for i in range(n):
@@ -288,7 +290,7 @@ def merge_county_expert_batches(
                     "county_meta": (
                         c.county_meta.tolist()
                         if c.county_meta is not None
-                        else compute_county_meta_from_npz(c.grid_npz).tolist()
+                        else compute_county_meta(c.state_name, c.county_name).tolist()
                     ),
                 }
                 for c in counties

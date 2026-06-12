@@ -1,4 +1,5 @@
 """IQ 联合训练配置（默认 MDP≥5 全量 1149 县 + CountyLocationEmbed）。"""
+from county_meta import COUNTY_META_DIM
 from obs_channels import ALL_OBS_CHANNELS
 from paths import DEFAULT_MDP_GE5_XLSX
 from state_county import StateCountyPair
@@ -26,7 +27,6 @@ CNN_DROPOUT = 0.0
 
 # CountyLocationEmbed（state + meta MLP + residual）
 COUNTY_EMBED_DIM = 16
-COUNTY_META_DIM = 5
 META_MLP_HIDDEN = 32
 N_US_STATES = 51
 N_MAX_COUNTY_RESIDUAL = 1149
