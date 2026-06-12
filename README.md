@@ -39,6 +39,8 @@ EV-charger-IRL-EB/
 
 ### 1. 数据
 
+将原始 GIS 数据放入 `data/`（见 `data/README.md`）。默认人口栅格为 **WorldPOP 2020**，POI 为 **2024** geoparquet。
+
 ```bash
 cd IRL_data
 pip install -r requirements.txt

@@ -32,6 +32,7 @@ from iq_learn.discrete_soft_q import DiscreteSoftQAgent
 from iq_learn.evaluate import evaluate_joint_all
 from iq_learn.metrics import aggregate_joint_eval_metrics, build_joint_final_eval, format_eval_log
 from iq_learn.expert_data import build_merged_expert_dataset
+from iq_learn.embedding_export import export_location_embeddings
 from iq_learn.plotting import plot_iq_metrics
 from iq_learn.policy_rollout import JointPolicyRolloutPool, warm_start_joint_policy_buffer
 from iq_learn.replay_buffer import StratifiedReplayBuffer
@@ -370,11 +371,17 @@ def run_joint_training(cfg: JointTrainConfig) -> dict[str, Any]:
     agent.save(str(ckpt_path))
     agent.save(str(out / "iq_learn_shared.pt"))
 
+    embed_export_dir = out / "embedding_export"
+    embed_paths = export_location_embeddings(str(ckpt_path), embed_export_dir)
+    if cfg.verbose:
+        print(f"[EB-IQ] embedding 导出 → {embed_export_dir}", flush=True)
+
     summary = {
         "config": asdict(cfg),
         "train_end_date": train_end.isoformat(),
         "policy_checkpoint": ckpt_path.name,
         "policy_path": str(ckpt_path),
+        "embedding_export": embed_paths,
         **train_summary,
     }
     with (out / "iq_learn_summary.json").open("w", encoding="utf-8") as f:

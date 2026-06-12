@@ -6,9 +6,9 @@ Place raw GIS and EV charging station datasets under this directory. The default
 data/
 ├── US-EV-Station-2014-2025/Daily/EVCS_sequence.pkl
 ├── US-map/usa_map.geojson
-├── US-WorldPOP-2014-2020/clipped/usa_ppp_2015_1km_Aggregated_UNadj_clipped_usa.tif
+├── US-WorldPOP-2014-2020/raw/usa_ppp_2020_1km_Aggregated_UNadj.tif
 ├── US-GDP/rast_gdpTot_1990_2024_30arcsec.tif
-├── US-poi-2014-2024/data_2015_geoparquet.parquet
+├── US-poi-2014-2024/data_2024_geoparquet.parquet
 └── US-highway/NTAD_National_Highway_System.geojson
 ├── joint_usa_map.geojson              # 县社会经济属性（IQ county_meta 三维）
 └── us_mdp_ge5_state_county_list.xlsx  # MDP≥5 训练县清单

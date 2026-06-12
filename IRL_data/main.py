@@ -54,13 +54,13 @@ class DataConfig:
 
     worldpop_tif_path: str = field(
         default_factory=lambda: str(
-            DATA_ROOT / "US-WorldPOP-2014-2020" / "clipped" / "usa_ppp_2015_1km_Aggregated_UNadj_clipped_usa.tif"
+            DATA_ROOT / "US-WorldPOP-2014-2020" / "raw" / "usa_ppp_2020_1km_Aggregated_UNadj.tif"
         )
     )
     gdp_tif_path: str = field(default_factory=lambda: str(DATA_ROOT / "US-GDP" / "rast_gdpTot_1990_2024_30arcsec.tif"))
     gdp_band: int = 6
     poi_geoparquet_path: str = field(
-        default_factory=lambda: str(DATA_ROOT / "US-poi-2014-2024" / "data_2015_geoparquet.parquet")
+        default_factory=lambda: str(DATA_ROOT / "US-poi-2014-2024" / "data_2024_geoparquet.parquet")
     )
     highway_geojson_path: str = field(
         default_factory=lambda: str(DATA_ROOT / "US-highway" / "NTAD_National_Highway_System.geojson")
