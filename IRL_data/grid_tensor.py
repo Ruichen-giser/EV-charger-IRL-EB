@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from county_list import county_grid_npz_filename
 from county_prepare import CountyTrajectoryPack
 from paths import DEFAULT_GRID_NPZ_DIR, DEFAULT_PREPARED_DATA_PKL
 from schema import GRID_FEATURE_PCT_COLS
@@ -134,9 +135,12 @@ def export_grids_from_prepared_pkl(
     cell_km = float(payload.get("config", {}).get("grid_cell_km", 2))
     for row in payload.get("packs", []):
         pack = pack_from_prepared_row(row)
-        safe = "".join(c if c.isalnum() else "_" for c in pack.county_name)
-        meta = export_county_grid_npz(pack, out_dir / f"{safe}_grid_features.npz", grid_cell_km=cell_km)
-        print(f"[IRL_data] exported {meta['path']} H={meta['grid_size_h']} W={meta['grid_size_w']}")
+        npz_name = county_grid_npz_filename(pack.state_name, pack.county_name)
+        meta = export_county_grid_npz(pack, out_dir / npz_name, grid_cell_km=cell_km)
+        print(
+            f"[IRL_data] exported {meta['path']} "
+            f"({pack.state_name} / {pack.county_name}) H={meta['grid_size_h']} W={meta['grid_size_w']}"
+        )
 
 
 if __name__ == "__main__":

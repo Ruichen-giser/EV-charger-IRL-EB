@@ -2,7 +2,7 @@
 IRL_data 入口（三步 pipeline）：
 
 1. 导入 GIS/EVCS，构建 2 km 网格特征（county_prepare）
-2. 按 county_names 逐县切分轨迹与 grids
+2. 按 Excel（MDP≥5）或 county_names 逐县切分轨迹与 grids
 3. 存储 prepared_irl_dataset.pkl 与 grid_tensors/*.npz，供 IRL_BC / IRL_IQ 读取
 """
 import json
@@ -14,12 +14,18 @@ from typing import Any
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-from county_prepare import CountyTrajectoryPack, prepare_county_trajectory_packs  # noqa: E402
+from county_list import county_grid_npz_filename, load_mdp_ge5_county_list  # noqa: E402
+from county_prepare import (  # noqa: E402
+    CountyTrajectoryPack,
+    prepare_county_trajectory_packs,
+    prepare_state_county_trajectory_packs,
+)
 from grid_tensor import export_county_grid_npz  # noqa: E402
 from paths import (  # noqa: E402
     DATA_ROOT,
     DEFAULT_CACHE_DIR,
     DEFAULT_GRID_NPZ_DIR,
+    DEFAULT_MDP_GE5_COUNTY_LIST_XLSX,
     DEFAULT_PREPARED_DATA_PKL,
     validate_project_layout,
 )
@@ -34,6 +40,13 @@ class DataConfig:
         default_factory=lambda: str(DATA_ROOT / "US-EV-Station-2014-2025" / "Daily" / "EVCS_sequence.pkl")
     )
     usa_map_path: str = field(default_factory=lambda: str(DATA_ROOT / "US-map" / "usa_map.geojson"))
+    # True：从 data/us_mdp_ge5_state_county_list.xlsx 读取 MDP≥5 的 state-county 列表
+    use_mdp_ge5_county_list: bool = True
+    mdp_ge5_county_list_xlsx: str = field(
+        default_factory=lambda: str(DEFAULT_MDP_GE5_COUNTY_LIST_XLSX)
+    )
+
+    # use_mdp_ge5_county_list=False 时沿用单州 + 逗号分隔县名
     state_name: str = "California"
     county_names: str = (
         "Siskiyou,Modoc,Shasta,Lassen,Los Angeles,Sacramento,San Diego,Kern"
@@ -92,6 +105,7 @@ def save_prepared_dataset(path: Path, payload: dict[str, Any]) -> None:
         "output_pkl": str(path),
         "counties": [
             {
+                "state_name": p.get("state_name"),
                 "county_name": p["county_name"],
                 "n_events": int(len(p["events"])),
                 "n_grids": int(len(p["grids"])),
@@ -108,26 +122,57 @@ def save_prepared_dataset(path: Path, payload: dict[str, Any]) -> None:
 def main(config: DataConfig | None = None) -> None:
     cfg = config if config is not None else CONFIG
     validate_project_layout()
-    county_names = [x.strip() for x in str(cfg.county_names).split(",") if x.strip()]
     cache_dir = Path(cfg.cache_dir) if cfg.cache_dir else None
 
-    packs = prepare_county_trajectory_packs(
-        Path(cfg.pkl_path),
-        Path(cfg.usa_map_path),
-        cfg.state_name,
-        county_names,
-        Path(cfg.worldpop_tif_path),
-        Path(cfg.gdp_tif_path),
-        int(cfg.gdp_band),
-        Path(cfg.poi_geoparquet_path),
-        Path(cfg.highway_geojson_path),
-        grid_subsample_mod=int(cfg.grid_subsample_mod),
-        grid_cell_km=int(cfg.grid_cell_km),
-        prune_zero_activity_grids=bool(cfg.prune_zero_activity_grids),
-        cache_dir=cache_dir,
-        use_cache=bool(cfg.enable_gis_cache),
-        n_jobs=int(cfg.county_data_workers),
-    )
+    if cfg.use_mdp_ge5_county_list:
+        state_county_pairs = load_mdp_ge5_county_list(Path(cfg.mdp_ge5_county_list_xlsx))
+        print(
+            f"[IRL_data] MDP≥5 county list: {len(state_county_pairs)} state-county pairs "
+            f"from {cfg.mdp_ge5_county_list_xlsx}",
+            flush=True,
+        )
+        n_listed = len(state_county_pairs)
+        packs = prepare_state_county_trajectory_packs(
+            Path(cfg.pkl_path),
+            Path(cfg.usa_map_path),
+            state_county_pairs,
+            Path(cfg.worldpop_tif_path),
+            Path(cfg.gdp_tif_path),
+            int(cfg.gdp_band),
+            Path(cfg.poi_geoparquet_path),
+            Path(cfg.highway_geojson_path),
+            grid_subsample_mod=int(cfg.grid_subsample_mod),
+            grid_cell_km=int(cfg.grid_cell_km),
+            prune_zero_activity_grids=bool(cfg.prune_zero_activity_grids),
+            cache_dir=cache_dir,
+            use_cache=bool(cfg.enable_gis_cache),
+            n_jobs=int(cfg.county_data_workers),
+        )
+        if len(packs) < n_listed:
+            print(
+                f"[IRL_data] 警告: Excel 列出 {n_listed} 县，实际产出 {len(packs)} 县 "
+                f"（{n_listed - len(packs)} 县因无 EVCS 事件被跳过）",
+                flush=True,
+            )
+    else:
+        county_names = [x.strip() for x in str(cfg.county_names).split(",") if x.strip()]
+        packs = prepare_county_trajectory_packs(
+            Path(cfg.pkl_path),
+            Path(cfg.usa_map_path),
+            cfg.state_name,
+            county_names,
+            Path(cfg.worldpop_tif_path),
+            Path(cfg.gdp_tif_path),
+            int(cfg.gdp_band),
+            Path(cfg.poi_geoparquet_path),
+            Path(cfg.highway_geojson_path),
+            grid_subsample_mod=int(cfg.grid_subsample_mod),
+            grid_cell_km=int(cfg.grid_cell_km),
+            prune_zero_activity_grids=bool(cfg.prune_zero_activity_grids),
+            cache_dir=cache_dir,
+            use_cache=bool(cfg.enable_gis_cache),
+            n_jobs=int(cfg.county_data_workers),
+        )
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -140,13 +185,13 @@ def main(config: DataConfig | None = None) -> None:
         npz_dir = Path(cfg.grid_npz_dir)
         npz_dir.mkdir(parents=True, exist_ok=True)
         for pack in packs:
-            safe = "".join(c if c.isalnum() else "_" for c in pack.county_name)
+            npz_name = county_grid_npz_filename(pack.state_name, pack.county_name)
             meta = export_county_grid_npz(
-                pack, npz_dir / f"{safe}_grid_features.npz", grid_cell_km=float(cfg.grid_cell_km)
+                pack, npz_dir / npz_name, grid_cell_km=float(cfg.grid_cell_km)
             )
             print(
-                f"[IRL_data] {pack.county_name}: npz H={meta['grid_size_h']} W={meta['grid_size_w']} "
-                f"expert_steps={meta['n_expert_steps']}",
+                f"[IRL_data] {pack.state_name} / {pack.county_name}: npz H={meta['grid_size_h']} "
+                f"W={meta['grid_size_w']} expert_steps={meta['n_expert_steps']}",
                 flush=True,
             )
 

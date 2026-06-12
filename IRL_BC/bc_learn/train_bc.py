@@ -74,7 +74,7 @@ def train_bc(cfg: BCTrainConfig) -> dict[str, Any]:
 
     if cfg.verbose:
         print(
-            f"[BC] {layout.county_name} 专家转移 {n_demo} 条，"
+            f"[BC] {layout.state_name}/{layout.county_name} 专家转移 {n_demo} 条，"
             f"grid {layout.H}×{layout.W}×{channel_cfg.n_channels}，动作数 {layout.n_actions}，"
             f"SimpleGridCNN（3×Conv3×3 + 1×1 head，dropout={cfg.dropout}，均匀采样），"
             f"通道 {channel_cfg.names}",
@@ -122,7 +122,7 @@ def train_bc(cfg: BCTrainConfig) -> dict[str, Any]:
         plot_bc_metrics(
             metrics_log,
             metrics_png,
-            title=f"{layout.county_name} SimpleGridCNN BC ({ch_tag})",
+            title=f"{layout.state_name}/{layout.county_name} SimpleGridCNN BC ({ch_tag})",
         )
 
     final_ev = evaluate_bc_all(agent, layout, channel_cfg)
@@ -132,7 +132,9 @@ def train_bc(cfg: BCTrainConfig) -> dict[str, Any]:
     agent.save(str(ckpt_path))
 
     summary = {
+        "state_name": layout.state_name,
         "county_name": layout.county_name,
+        "location_key": f"{layout.state_name}/{layout.county_name}",
         "seed": int(cfg.seed),
         "train_end_date": train_end.isoformat(),
         "policy_checkpoint": ckpt_path.name,

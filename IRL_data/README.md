@@ -39,10 +39,15 @@ python main.py
 | `paths.py` | — | 输出路径 |
 | `schema.py` | — | 版本号、五通道列名 |
 
+## 县清单（默认）
+
+默认从 `data/us_mdp_ge5_state_county_list.xlsx` 读取 MDP 轨迹长度 ≥ 5 的 state-county（约 1149 县），
+逐县裁剪 GIS/建站轨迹并写入 `grid_tensors/`。在 `main.py` 中设 `use_mdp_ge5_county_list = False` 可恢复单州 + `county_names` 模式。
+
 ## 输出
 
 - `outputs/prepared_data/prepared_irl_dataset.pkl`
-- `outputs/prepared_data/grid_tensors/<县>_grid_features.npz`
+- `outputs/prepared_data/grid_tensors/<州>__<县>_grid_features.npz`（多州同名县不冲突）
 
 仅重导出 npz：`python grid_tensor.py`
 

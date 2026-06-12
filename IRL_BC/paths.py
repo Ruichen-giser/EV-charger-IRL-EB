@@ -26,13 +26,17 @@ def ensure_grid_npz_dir(grid_npz_dir: Path) -> None:
     if not grid_npz_dir.is_dir():
         raise FileNotFoundError(
             f"网格数据目录不存在: {grid_npz_dir}\n"
-            "请先运行 IRL_data/main.py，或在目录中放置 <县名>_grid_features.npz"
+            "请先运行 IRL_data/main.py，或在目录中放置 <州>__<县>_grid_features.npz"
         )
 
 
-def default_output_dir(county: str, base: Path = DEFAULT_BC_OUTPUT_DIR) -> Path:
-    """按县名生成输出子目录。"""
-    return base.parent / county.lower().replace(" ", "_")
+def default_output_dir(pair, base: Path = DEFAULT_BC_OUTPUT_DIR) -> Path:
+    """按 state-county 生成输出子目录。"""
+    from state_county import StateCountyPair, default_output_stem
+
+    if not isinstance(pair, StateCountyPair):
+        pair = StateCountyPair("California", str(pair).replace("_", " "))
+    return base.parent / default_output_stem(pair)
 
 
 def policy_checkpoint_filename(

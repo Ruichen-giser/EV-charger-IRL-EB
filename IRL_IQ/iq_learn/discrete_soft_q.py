@@ -1,4 +1,4 @@
-"""离散 Soft Q：SimpleGridCNN + county embedding + 掩膜 soft V(s)。"""
+"""离散 Soft Q：SimpleGridCNN + CountyLocationEmbed + 掩膜 soft V(s)。"""
 from __future__ import annotations
 
 import copy
@@ -8,7 +8,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from cnn_config import CNN_DROPOUT, CNN_N_CONV_LAYERS, COUNTY_EMBED_DIM
+from cnn_config import (
+    CNN_DROPOUT,
+    CNN_N_CONV_LAYERS,
+    COUNTY_EMBED_DIM,
+    COUNTY_META_DIM,
+    EMBED_DROPOUT,
+    META_MLP_HIDDEN,
+    N_MAX_COUNTY_RESIDUAL,
+    N_US_STATES,
+    RESIDUAL_ALPHA,
+)
 from models.simple_grid_cnn import SimpleGridCNN
 from iq_learn.iq_loss import IQ_LOSS_MODES, iq_learn_loss
 from models.soft_q_ops import masked_soft_value, soft_policy_entropy
@@ -26,8 +36,14 @@ class SimpleGridCNNQ(nn.Module):
         *,
         n_conv_layers: int = CNN_N_CONV_LAYERS,
         dropout: float = CNN_DROPOUT,
-        n_counties: int = 0,
-        county_embed_dim: int = COUNTY_EMBED_DIM,
+        use_location_embed: bool = True,
+        embed_dim: int = COUNTY_EMBED_DIM,
+        meta_dim: int = COUNTY_META_DIM,
+        meta_hidden: int = META_MLP_HIDDEN,
+        n_states: int = N_US_STATES,
+        n_residual: int = N_MAX_COUNTY_RESIDUAL,
+        residual_alpha: float = RESIDUAL_ALPHA,
+        embed_dropout: float = EMBED_DROPOUT,
     ) -> None:
         super().__init__()
         self.grid_h = int(grid_h)
@@ -39,29 +55,47 @@ class SimpleGridCNNQ(nn.Module):
             action_dim=int(action_dim),
             n_conv_layers=int(n_conv_layers),
             dropout=float(dropout),
-            n_counties=int(n_counties),
-            county_embed_dim=int(county_embed_dim),
+            use_location_embed=bool(use_location_embed),
+            embed_dim=int(embed_dim),
+            meta_dim=int(meta_dim),
+            meta_hidden=int(meta_hidden),
+            n_states=int(n_states),
+            n_residual=int(n_residual),
+            residual_alpha=float(residual_alpha),
+            embed_dropout=float(embed_dropout),
         )
 
-    def forward(self, obs: torch.Tensor, county_ids: torch.Tensor | None = None) -> torch.Tensor:
-        return self.net(obs, county_ids)
+    def forward(
+        self,
+        obs: torch.Tensor,
+        state_ids: torch.Tensor | None = None,
+        county_meta: torch.Tensor | None = None,
+        county_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.net(obs, state_ids, county_meta, county_ids)
 
     def q_values(
         self,
         obs: torch.Tensor,
         actions: torch.Tensor,
+        state_ids: torch.Tensor | None = None,
+        county_meta: torch.Tensor | None = None,
         county_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return self.forward(obs, county_ids).gather(1, actions.long())
+        return self.forward(obs, state_ids, county_meta, county_ids).gather(1, actions.long())
 
     def soft_value(
         self,
         obs: torch.Tensor,
         mask: torch.Tensor,
         alpha: float,
+        state_ids: torch.Tensor | None = None,
+        county_meta: torch.Tensor | None = None,
         county_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return masked_soft_value(self.forward(obs, county_ids), mask, alpha)
+        return masked_soft_value(
+            self.forward(obs, state_ids, county_meta, county_ids), mask, alpha
+        )
 
 
 class DiscreteSoftQAgent:
@@ -84,10 +118,18 @@ class DiscreteSoftQAgent:
         grid_w: int = 0,
         in_channels: int = 0,
         n_counties: int = 0,
-        county_embed_dim: int = COUNTY_EMBED_DIM,
+        embed_dim: int = COUNTY_EMBED_DIM,
+        meta_dim: int = COUNTY_META_DIM,
+        meta_hidden: int = META_MLP_HIDDEN,
+        n_states: int = N_US_STATES,
+        n_residual: int = N_MAX_COUNTY_RESIDUAL,
+        residual_alpha: float = RESIDUAL_ALPHA,
+        embed_dropout: float = EMBED_DROPOUT,
         n_conv_layers: int = CNN_N_CONV_LAYERS,
         dropout: float = CNN_DROPOUT,
         county_names: list[str] | None = None,
+        state_names: list[str] | None = None,
+        location_labels: list[str] | None = None,
         **_: Any,
     ) -> None:
         del obs_dim
@@ -102,14 +144,20 @@ class DiscreteSoftQAgent:
         self.iq_loss_mode = mode
         self.target_update_interval = int(target_update_interval)
         self._step = 0
-        self.network_type = "SimpleGridCNN+CountyEmbed"
+        self.network_type = "SimpleGridCNN+CountyLocationEmbed"
         self.grid_h = int(grid_h)
         self.grid_w = int(grid_w)
         self.in_channels = int(in_channels)
         self.n_actions = int(n_actions)
         self.n_counties = int(n_counties)
-        self.county_embed_dim = int(county_embed_dim)
+        self.embed_dim = int(embed_dim)
+        self.meta_dim = int(meta_dim)
+        self.n_states = int(n_states)
+        self.n_residual = int(n_residual)
+        self.residual_alpha = float(residual_alpha)
         self.county_names = list(county_names or [])
+        self.state_names = list(state_names or [])
+        self.location_labels = list(location_labels or self.county_names)
 
         self.q_net: nn.Module = SimpleGridCNNQ(
             in_channels=self.in_channels,
@@ -118,8 +166,14 @@ class DiscreteSoftQAgent:
             action_dim=self.n_actions,
             n_conv_layers=int(n_conv_layers),
             dropout=float(dropout),
-            n_counties=self.n_counties,
-            county_embed_dim=self.county_embed_dim,
+            use_location_embed=True,
+            embed_dim=self.embed_dim,
+            meta_dim=self.meta_dim,
+            meta_hidden=int(meta_hidden),
+            n_states=self.n_states,
+            n_residual=self.n_residual,
+            residual_alpha=self.residual_alpha,
+            embed_dropout=float(embed_dropout),
         ).to(self.device)
 
         self.target_net = copy.deepcopy(self.q_net)
@@ -137,14 +191,18 @@ class DiscreteSoftQAgent:
         mask = batch["mask"]
         next_mask = batch["next_mask"]
         is_expert = batch.get("is_expert")
+        state_ids = batch.get("state_ids")
+        county_meta = batch.get("county_meta")
         county_ids = batch.get("county_ids")
 
-        q_all = self.q_net(obs, county_ids)
+        q_all = self.q_net(obs, state_ids, county_meta, county_ids)
         q_sa = q_all.gather(1, actions.long())
-        v_s = self.q_net.soft_value(obs, mask, self.alpha, county_ids)
+        v_s = self.q_net.soft_value(obs, mask, self.alpha, state_ids, county_meta, county_ids)
 
         with torch.no_grad():
-            next_v = self.target_net.soft_value(next_obs, next_mask, self.alpha, county_ids)
+            next_v = self.target_net.soft_value(
+                next_obs, next_mask, self.alpha, state_ids, county_meta, county_ids
+            )
             entropy = float(soft_policy_entropy(q_all, mask, self.alpha).detach())
             if is_expert is not None:
                 m_all = is_expert.view(-1).bool()
@@ -215,10 +273,12 @@ class DiscreteSoftQAgent:
         obs: torch.Tensor,
         mask: torch.Tensor,
         rng: np.random.Generator,
+        state_ids: torch.Tensor | None = None,
+        county_meta: torch.Tensor | None = None,
         county_ids: torch.Tensor | None = None,
     ) -> int:
         self.q_net.eval()
-        q = self.q_net(obs, county_ids).detach().reshape(-1).cpu().numpy()
+        q = self.q_net(obs, state_ids, county_meta, county_ids).detach().reshape(-1).cpu().numpy()
         valid = mask.reshape(-1).cpu().numpy().astype(bool)
         valid_idx = np.flatnonzero(valid)
         if valid_idx.size == 0:
@@ -246,17 +306,19 @@ class DiscreteSoftQAgent:
         self,
         obs: torch.Tensor,
         mask: torch.Tensor,
+        state_ids: torch.Tensor | None = None,
+        county_meta: torch.Tensor | None = None,
         county_ids: torch.Tensor | None = None,
     ) -> int:
         self.q_net.eval()
-        q = self.q_net(obs, county_ids)
+        q = self.q_net(obs, state_ids, county_meta, county_ids)
         neg_inf = torch.finfo(q.dtype).min
         return int(q.masked_fill(~mask, neg_inf).argmax(dim=1).item())
 
     def save(self, path: str) -> None:
         torch.save(
             {
-                "network": "SimpleGridCNN+CountyEmbed",
+                "network": self.network_type,
                 "q_net": self.q_net.state_dict(),
                 "target_net": self.target_net.state_dict(),
                 "alpha": self.alpha,
@@ -269,8 +331,14 @@ class DiscreteSoftQAgent:
                 "in_channels": self.in_channels,
                 "n_actions": self.n_actions,
                 "n_counties": self.n_counties,
-                "county_embed_dim": self.county_embed_dim,
+                "embed_dim": self.embed_dim,
+                "meta_dim": self.meta_dim,
+                "n_states": self.n_states,
+                "n_residual": self.n_residual,
+                "residual_alpha": self.residual_alpha,
                 "county_names": self.county_names,
+                "state_names": self.state_names,
+                "location_labels": self.location_labels,
             },
             path,
         )
@@ -283,3 +351,16 @@ class DiscreteSoftQAgent:
             self.iq_loss_mode = str(blob["iq_loss_mode"])
         if "county_names" in blob:
             self.county_names = list(blob["county_names"])
+        if "state_names" in blob:
+            self.state_names = list(blob["state_names"])
+        if "location_labels" in blob:
+            self.location_labels = list(blob["location_labels"])
+        if "n_states" in blob:
+            self.n_states = int(blob["n_states"])
+        if "embed_dim" in blob:
+            self.embed_dim = int(blob["embed_dim"])
+        if "residual_alpha" in blob:
+            self.residual_alpha = float(blob["residual_alpha"])
+            loc = getattr(self.q_net.net, "location_embed", None)
+            if loc is not None and hasattr(loc, "residual_alpha"):
+                loc.residual_alpha.fill_(self.residual_alpha)

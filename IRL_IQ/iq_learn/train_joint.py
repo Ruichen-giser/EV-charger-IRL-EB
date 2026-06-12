@@ -1,4 +1,4 @@
-"""8 县联合 IQ-Learn：共享 SimpleGridCNN + county embedding。"""
+"""多县联合 IQ-Learn：共享 SimpleGridCNN + county embedding（默认 MDP≥5 全量）。"""
 from __future__ import annotations
 
 import copy
@@ -14,9 +14,20 @@ import torch
 from cnn_config import (
     CNN_DROPOUT,
     COUNTY_EMBED_DIM,
+    COUNTY_META_DIM,
+    DEFAULT_EVAL_FINAL_MAX_COUNTIES,
+    DEFAULT_EVAL_MAX_COUNTIES,
+    DEFAULT_IQ_LOSS_MODE,
     DEFAULT_OBS_CHANNEL_NAMES,
-    TRAINING_COUNTIES,
+    DEFAULT_ROLLOUT_MAX_SESSIONS,
+    EMBED_DROPOUT,
+    META_MLP_HIDDEN,
+    N_MAX_COUNTY_RESIDUAL,
+    N_US_STATES,
+    RESIDUAL_ALPHA,
 )
+from county_meta import US_STATE_NAMES, state_name_to_id
+from state_county import StateCountyPair, build_global_residual_index, build_location_vocab
 from iq_learn.discrete_soft_q import DiscreteSoftQAgent
 from iq_learn.evaluate import evaluate_joint_all
 from iq_learn.metrics import aggregate_joint_eval_metrics, build_joint_final_eval, format_eval_log
@@ -44,12 +55,13 @@ def _resolve_device(device: str) -> str:
 class JointTrainConfig:
     grid_npz_paths: list[str]
     output_dir: str
-    counties: tuple[str, ...] = TRAINING_COUNTIES
+    state_counties: tuple[StateCountyPair, ...] = ()
+    mdp_ge5_xlsx: str = ""
     gamma: float = 0.99
     alpha: float = 0.01
     alpha_reg: float = 0.5
     use_chi: bool = True
-    iq_loss_mode: str = "online"
+    iq_loss_mode: str = DEFAULT_IQ_LOSS_MODE
     lr: float = 5e-5
     batch_size: int = 64
     train_steps: int = 50_000
@@ -59,11 +71,19 @@ class JointTrainConfig:
     device: str = "auto"
     dropout: float = CNN_DROPOUT
     obs_channel_names: tuple[str, ...] = DEFAULT_OBS_CHANNEL_NAMES
-    county_embed_dim: int = COUNTY_EMBED_DIM
+    embed_dim: int = COUNTY_EMBED_DIM
+    meta_dim: int = COUNTY_META_DIM
+    meta_hidden: int = META_MLP_HIDDEN
+    n_residual: int = N_MAX_COUNTY_RESIDUAL
+    residual_alpha: float = RESIDUAL_ALPHA
+    embed_dropout: float = EMBED_DROPOUT
     use_stratified_buffer: bool = True
-    expert_batch_fraction: float = 0.5
-    policy_buffer_capacity: int = 20_000
+    expert_batch_fraction: float = 1.0
+    policy_buffer_capacity: int = 50_000
     policy_warmup_transitions: int = 200
+    eval_max_counties: int = DEFAULT_EVAL_MAX_COUNTIES
+    eval_final_max_counties: int = DEFAULT_EVAL_FINAL_MAX_COUNTIES
+    rollout_max_sessions: int = DEFAULT_ROLLOUT_MAX_SESSIONS
     verbose: int = 1
 
 
@@ -79,8 +99,30 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
     if cfg.iq_loss_mode == "online" and not cfg.use_stratified_buffer:
         raise ValueError("iq_loss_mode=online 需要 use_stratified_buffer=True")
 
+    if len(cfg.grid_npz_paths) != len(cfg.state_counties):
+        raise ValueError(
+            f"grid_npz_paths ({len(cfg.grid_npz_paths)}) 与 state_counties "
+            f"({len(cfg.state_counties)}) 数量不一致"
+        )
+
     channel_cfg = ObsChannelConfig(names=tuple(cfg.obs_channel_names))
-    merged = build_merged_expert_dataset(cfg.grid_npz_paths, channel_cfg=channel_cfg)
+    pairs = list(cfg.state_counties)
+    pair_to_loc_id, _, _, location_labels = build_location_vocab(pairs)
+    state_ids_for_paths = [state_name_to_id(p.state_name) for p in pairs]
+    if str(cfg.mdp_ge5_xlsx).strip():
+        global_idx = build_global_residual_index(cfg.mdp_ge5_xlsx)
+        county_ids_for_paths = [
+            global_idx.get((p.state_name, p.county_name), pair_to_loc_id[(p.state_name, p.county_name)])
+            for p in pairs
+        ]
+    else:
+        county_ids_for_paths = [pair_to_loc_id[(p.state_name, p.county_name)] for p in pairs]
+    merged = build_merged_expert_dataset(
+        cfg.grid_npz_paths,
+        channel_cfg=channel_cfg,
+        state_ids=state_ids_for_paths,
+        county_ids=county_ids_for_paths,
+    )
     canvas = merged.canvas
     counties = merged.counties
     county_names = [c.county_name for c in counties]
@@ -100,13 +142,23 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         grid_w=int(canvas.max_w),
         in_channels=int(channel_cfg.n_channels),
         n_counties=len(counties),
-        county_embed_dim=int(cfg.county_embed_dim),
+        embed_dim=int(cfg.embed_dim),
+        meta_dim=int(cfg.meta_dim),
+        meta_hidden=int(cfg.meta_hidden),
+        n_states=N_US_STATES,
+        n_residual=int(cfg.n_residual),
+        residual_alpha=float(cfg.residual_alpha),
+        embed_dropout=float(cfg.embed_dropout),
         dropout=float(cfg.dropout),
         county_names=county_names,
+        state_names=list(US_STATE_NAMES),
+        location_labels=location_labels,
     )
 
+    n_expert = len(merged)
+    expert_cap = max(n_expert, 100_000)
     buffer = StratifiedReplayBuffer(
-        capacity_expert=100_000,
+        capacity_expert=expert_cap,
         capacity_policy=int(cfg.policy_buffer_capacity),
         expert_fraction=float(cfg.expert_batch_fraction),
         spatial=True,
@@ -119,16 +171,38 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         merged.mask,
         merged.next_mask,
         merged.county_ids,
+        merged.state_ids,
+        merged.county_meta,
     )
+    if len(buffer._expert) < n_expert and cfg.verbose:
+        print(
+            f"[EB-IQ] 警告: 专家 buffer 容量 {expert_cap} < 合并专家转移 {n_expert}，"
+            f"仅保留 {len(buffer._expert)} 条",
+            flush=True,
+        )
 
+    use_policy_rollout = str(cfg.iq_loss_mode).strip().lower() == "online"
     rollout_pool: JointPolicyRolloutPool | None = None
-    if cfg.use_stratified_buffer:
-        rollout_pool = JointPolicyRolloutPool(counties, canvas, channel_cfg=channel_cfg)
+    if use_policy_rollout:
+        if not cfg.use_stratified_buffer:
+            raise ValueError("iq_loss_mode=online 需要 use_stratified_buffer=True")
+        rollout_pool = JointPolicyRolloutPool(
+            counties,
+            canvas,
+            channel_cfg=channel_cfg,
+            max_active_sessions=int(cfg.rollout_max_sessions),
+        )
         n_warm = warm_start_joint_policy_buffer(
             agent, buffer, rollout_pool, int(cfg.policy_warmup_transitions), rng
         )
         if cfg.verbose:
-            print(f"[EB-IQ] 策略 buffer 预填充 {n_warm} 条（8 县随机 rollout）", flush=True)
+            print(
+                f"[EB-IQ] 策略 buffer 预填充 {n_warm} 条（{len(counties)} 县随机 rollout，"
+                f"活跃 session≤{cfg.rollout_max_sessions}）",
+                flush=True,
+            )
+    elif cfg.verbose:
+        print("[EB-IQ] iq_loss_mode=offline：仅专家轨迹训练，跳过策略 rollout 池", flush=True)
 
     eval_every = max(1, int(cfg.eval_every))
     metrics_log: list[dict[str, Any]] = []
@@ -142,11 +216,19 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         print(
             f"[EB-IQ] 联合训练 {len(counties)} 县，画布 {canvas.max_h}×{canvas.max_w}，"
             f"专家转移 {len(merged)} 条，obs 通道 {channel_cfg.n_channels}，"
-            f"county_embed_dim={cfg.county_embed_dim}，IQ={cfg.iq_loss_mode}",
+            f"embed_dim={cfg.embed_dim} meta_dim={cfg.meta_dim} residual_alpha={cfg.residual_alpha}，"
+            f"IQ={cfg.iq_loss_mode}",
             flush=True,
         )
-        for c in counties:
-            print(f"  id={c.county_id} {c.county_name} grid {c.H}×{c.W} npz={Path(c.grid_npz).name}", flush=True)
+        preview = counties if len(counties) <= 8 else counties[:3]
+        for c in preview:
+            print(
+                f"  loc={c.county_id} state={c.state_id} {c.state_name}/{c.county_name} "
+                f"grid {c.H}×{c.W} npz={Path(c.grid_npz).name}",
+                flush=True,
+            )
+        if len(counties) > len(preview):
+            print(f"  ... 共 {len(counties)} 县", flush=True)
 
     for step in range(1, int(cfg.train_steps) + 1):
         if rollout_pool is not None:
@@ -158,7 +240,15 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         if step % eval_every != 0:
             continue
 
-        per_county, agg = evaluate_joint_all(agent, counties, canvas, channel_cfg)
+        eval_cap = int(cfg.eval_max_counties)
+        per_county, agg = evaluate_joint_all(
+            agent,
+            counties,
+            canvas,
+            channel_cfg,
+            max_counties=eval_cap if eval_cap > 0 else None,
+            rng=rng,
+        )
         # 环境评估：expert_rollin + policy_rollout（与 EV-charger-IRL metrics_log 键对齐）
         row: dict[str, Any] = {
             "step": step,
@@ -191,22 +281,48 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         agent.q_net.load_state_dict(best_state)
         agent.target_net.load_state_dict(best_state)
 
-    per_final, _agg_final = evaluate_joint_all(agent, counties, canvas, channel_cfg)
+    final_cap = int(cfg.eval_final_max_counties)
+    per_final, _agg_final = evaluate_joint_all(
+        agent,
+        counties,
+        canvas,
+        channel_cfg,
+        max_counties=final_cap if final_cap > 0 else None,
+        rng=rng,
+    )
     final_ev = build_joint_final_eval(per_final)
     if cfg.verbose:
-        print(f"[EB-IQ] final eval | {format_eval_log(final_ev)}", flush=True)
+        n_eval = len(per_final)
+        scope = f"{n_eval}/{len(counties)} 县"
+        if final_cap <= 0 or n_eval >= len(counties):
+            scope = f"全量 {len(counties)} 县"
+        print(f"[EB-IQ] final eval ({scope}) | {format_eval_log(final_ev)}", flush=True)
 
     if PLOT_EVAL_METRICS_AT_END and metrics_log:
         plot_iq_metrics(
             metrics_log,
             metrics_png,
-            title=f"Joint IQ-Learn ({len(counties)} counties, embed={cfg.county_embed_dim})",
+            title=f"Joint IQ-Learn ({len(counties)} counties, embed={cfg.embed_dim})",
         )
 
     summary: dict[str, Any] = {
-        "training_mode": "joint_8counties_shared_q",
+        "training_mode": (
+            "joint_mdp_ge5_expert_only"
+            if str(cfg.iq_loss_mode).strip().lower() == "offline"
+            else "joint_mdp_ge5_shared_q"
+        ),
+        "iq_loss_mode": str(cfg.iq_loss_mode),
+        "eval_max_counties": int(cfg.eval_max_counties),
+        "eval_final_max_counties": int(cfg.eval_final_max_counties),
+        "n_counties_evaluated_final": len(per_final),
+        "state_counties": [p.key for p in pairs],
         "counties": county_names,
-        "county_embed_dim": int(cfg.county_embed_dim),
+        "state_names": list(US_STATE_NAMES),
+        "location_labels": location_labels,
+        "embed_dim": int(cfg.embed_dim),
+        "meta_dim": int(cfg.meta_dim),
+        "n_residual": int(cfg.n_residual),
+        "residual_alpha": float(cfg.residual_alpha),
         "canvas": {"max_h": canvas.max_h, "max_w": canvas.max_w, "n_actions": canvas.n_actions},
         "merged_meta": merged.meta,
         "seed": seed,

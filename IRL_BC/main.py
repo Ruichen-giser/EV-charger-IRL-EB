@@ -28,15 +28,16 @@ from mdp_config import apply_mdp_mode, current_mdp_mode  # noqa: E402
 import torch  # noqa: E402
 
 from bc_learn.train_bc import BCTrainConfig, run_bc  # noqa: E402
-from cnn_config import CNN_DROPOUT, DEFAULT_COUNTY, DEFAULT_OBS_CHANNEL_NAMES  # noqa: E402
-from data_prep import prepare_county_npz  # noqa: E402
+from cnn_config import CNN_DROPOUT, DEFAULT_OBS_CHANNEL_NAMES, DEFAULT_STATE_COUNTY  # noqa: E402
+from data_prep import prepare_state_county_npz  # noqa: E402
+from state_county import StateCountyPair  # noqa: E402
 
 
 @dataclass
 class MainConfig:
     """BC 训练超参数。"""
 
-    county: str = DEFAULT_COUNTY
+    state_county: StateCountyPair = field(default_factory=lambda: DEFAULT_STATE_COUNTY)
     mdp_mode: str = "legacy"
     grid_npz_dir: str = field(default_factory=lambda: str(DEFAULT_GRID_NPZ_DIR))
     output_dir: str = ""
@@ -76,8 +77,13 @@ def run_main(cfg: MainConfig) -> dict:
     if torch.cuda.is_available():
         print(f"[BC] GPU: {torch.cuda.get_device_name(0)}", flush=True)
 
-    npz = prepare_county_npz(grid_dir, cfg.county, log_prefix="BC")
-    out = Path(cfg.output_dir) if cfg.output_dir else default_output_dir(cfg.county, DEFAULT_BC_OUTPUT_DIR)
+    pair = cfg.state_county
+    npz = prepare_state_county_npz(grid_dir, pair, log_prefix="BC")
+    out = (
+        Path(cfg.output_dir)
+        if cfg.output_dir
+        else default_output_dir(pair, DEFAULT_BC_OUTPUT_DIR)
+    )
 
     summary = run_bc(
         BCTrainConfig(
@@ -96,7 +102,7 @@ def run_main(cfg: MainConfig) -> dict:
     )
     summary["mdp_mode"] = current_mdp_mode()
     print(
-        f"[BC] {cfg.county} 完成 "
+        f"[BC] {pair.key} 完成 "
         f"expert_rollin: match={summary['mean_expert_match_rate']:.3f} "
         f"top10={summary['top10_accuracy']:.3f} "
         f"dist_km={summary['mean_distance_km']:.2f} | "
@@ -119,7 +125,14 @@ def main() -> None:
         choices=("legacy", "repeat"),
         help="legacy=旧版(默认): 掩膜排除已建站+专家去重; repeat=完整专家序列可重复格",
     )
-    parser.add_argument("--county", type=str, default=DEFAULT_COUNTY, help="县名，如 Los_Angeles")
+    parser.add_argument("--state", type=str, default=DEFAULT_STATE_COUNTY.state_name)
+    parser.add_argument("--county", type=str, default=DEFAULT_STATE_COUNTY.county_name.replace(" ", "_"))
+    parser.add_argument(
+        "--state-county",
+        type=str,
+        default="",
+        help='覆盖 --state/--county，如 "California/Los Angeles"',
+    )
     parser.add_argument("--grid-npz-dir", type=str, default=str(DEFAULT_GRID_NPZ_DIR))
     parser.add_argument("--output-dir", type=str, default="")
     parser.add_argument("--train-steps", type=int, default=1_000_000)
@@ -131,10 +144,15 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0, help="随机种子（影响训练与 checkpoint 文件名）")
     args = parser.parse_args()
 
+    if args.state_county:
+        pair = StateCountyPair.parse(args.state_county)
+    else:
+        pair = StateCountyPair(args.state, args.county.replace("_", " "))
+
     run_main(
         MainConfig(
             mdp_mode=str(args.mdp_mode),
-            county=args.county.replace(" ", "_"),
+            state_county=pair,
             grid_npz_dir=args.grid_npz_dir,
             output_dir=args.output_dir,
             train_steps=int(args.train_steps),

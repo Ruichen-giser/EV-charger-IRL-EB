@@ -38,6 +38,7 @@ def expert_action_sequence(expert_actions: np.ndarray, grid_w: int) -> np.ndarra
 
 @dataclass
 class CountyLayout:
+    state_name: str
     county_name: str
     grid_npz: str
     H: int
@@ -139,6 +140,7 @@ def collect_expert_transitions(
         raise ValueError(f"无有效专家转移: {grid_npz}")
 
     layout = CountyLayout(
+        state_name=base.state_name,
         county_name=base.county_name,
         grid_npz=str(grid_npz),
         H=int(base.H),

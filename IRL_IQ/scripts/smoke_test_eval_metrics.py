@@ -52,13 +52,22 @@ PLOT_EVAL_KEYS = (
 )
 
 
-def _write_toy_npz(path: Path, *, county_name: str, h: int, w: int, expert_actions: list[int]) -> None:
+def _write_toy_npz(
+    path: Path,
+    *,
+    state_name: str,
+    county_name: str,
+    h: int,
+    w: int,
+    expert_actions: list[int],
+) -> None:
     np.savez(
         path,
         grid_features=np.random.rand(h, w, 5).astype(np.float32),
         valid_mask=np.ones((h, w), dtype=bool),
         expert_actions=np.asarray(expert_actions, dtype=np.int64),
         grid_cell_km=np.float32(2.0),
+        state_name=np.asarray([state_name]),
         county_name=np.asarray([county_name]),
     )
 
@@ -114,16 +123,28 @@ def main() -> None:
         counties: list[CountyLayout] = []
         for cid, (name, h, w, actions) in enumerate(specs):
             npz = tmp_path / f"{name}_grid_cropped.npz"
-            _write_toy_npz(npz, county_name=name, h=h, w=w, expert_actions=actions)
+            _write_toy_npz(
+                npz,
+                state_name="California",
+                county_name=name,
+                h=h,
+                w=w,
+                expert_actions=actions,
+            )
+            from county_meta import compute_county_meta_from_npz, state_name_to_id
+
             counties.append(
                 CountyLayout(
                     county_id=cid,
+                    state_id=state_name_to_id("California"),
+                    state_name="California",
                     county_name=name,
                     grid_npz=str(npz),
                     H=h,
                     W=w,
                     cell_km=2.0,
                     n_obs_channels=channel_cfg.n_channels,
+                    county_meta=compute_county_meta_from_npz(npz),
                 )
             )
 
@@ -136,8 +157,13 @@ def main() -> None:
             grid_w=int(canvas.max_w),
             in_channels=int(channel_cfg.n_channels),
             n_counties=len(counties),
-            county_embed_dim=8,
+            embed_dim=8,
+            meta_dim=5,
+            n_states=51,
+            n_residual=1149,
+            residual_alpha=0.0,
             county_names=[c.county_name for c in counties],
+            state_names=["California"],
         )
 
         per_county, _ = evaluate_joint_all(agent, counties, canvas, channel_cfg)
@@ -186,7 +212,8 @@ def main() -> None:
             "in_channels",
             "n_actions",
             "n_counties",
-            "county_embed_dim",
+            "embed_dim",
+            "meta_dim",
             "county_names",
         }
         missing_ckpt = required - set(blob)
@@ -200,8 +227,13 @@ def main() -> None:
             grid_w=int(canvas.max_w),
             in_channels=int(channel_cfg.n_channels),
             n_counties=len(counties),
-            county_embed_dim=8,
+            embed_dim=8,
+            meta_dim=5,
+            n_states=51,
+            n_residual=1149,
+            residual_alpha=0.0,
             county_names=[c.county_name for c in counties],
+            state_names=["California"],
         )
         agent2.load(str(ckpt_path))
         print(f"[smoke] Q 网络存储 OK → {ckpt_name} (network={blob['network']})")

@@ -35,8 +35,8 @@ from grid_ops import (
 from schema import FUEL_STATION_LABEL, SCHEMA_VERSION
 
 
-def load_evcs_events(pkl_path: Path, *, state: str = "CA") -> pd.DataFrame:
-    """从 EVCS_sequence.pkl 读取建站序列：去重、排序，默认仅加州。"""
+def load_evcs_events(pkl_path: Path, *, state: str | None = "CA") -> pd.DataFrame:
+    """从 EVCS_sequence.pkl 读取建站序列：去重、排序。state=None 时保留全美。"""
     df = pickle.load(Path(pkl_path).open("rb"))
     df = df.copy()
     df["OpenDate"] = pd.to_datetime(df["OpenDate"], errors="coerce")
@@ -158,6 +158,8 @@ def prepare_county_dataset(
     cache_dir: Path | None = None,
     use_cache: bool = True,
     grid_cell_km: int = 2,
+    events_all: pd.DataFrame | None = None,
+    evcs_state_abbr: str | None = "CA",
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict | None]:
     grid_cell_km = max(1, int(grid_cell_km))
 
@@ -182,12 +184,15 @@ def prepare_county_dataset(
         if cached is not None:
             return cached
 
-    # --- 1. 事件：加州 EVCS → 县界内 ---
+    # --- 1. 事件：EVCS → 县界内（空间裁剪，不依赖站点 State 字段）---
     county_gdf = load_county_gdf(usa_map_path, state_name, county_name)
     bounds = county_gdf.total_bounds
 
-    events = load_evcs_events(pkl_path, state="CA")
-    events = filter_events_within_county(events, usa_map_path, state_name, county_name)
+    if events_all is not None:
+        events = filter_events_within_county(events_all, usa_map_path, state_name, county_name)
+    else:
+        events = load_evcs_events(pkl_path, state=evcs_state_abbr)
+        events = filter_events_within_county(events, usa_map_path, state_name, county_name)
     if events.empty:
         raise ValueError(f"No EVCS events in county {county_name} after boundary filter.")
 
@@ -367,4 +372,83 @@ def prepare_county_trajectory_packs(
             packs = list(ex.map(one, cleaned))
     if not packs:
         raise ValueError("county_names is empty.")
+    return packs
+
+
+def prepare_state_county_trajectory_packs(
+    pkl_path: Path,
+    usa_map_path: Path,
+    state_county_pairs: list[tuple[str, str]],
+    worldpop_tif_path: Path,
+    gdp_tif_path: Path,
+    gdp_band_1based: int,
+    poi_geoparquet_path: Path,
+    highway_geojson_path: Path,
+    *,
+    grid_subsample_mod: int = 1,
+    prune_zero_activity_grids: bool = False,
+    cache_dir: Path | None = None,
+    use_cache: bool = True,
+    n_jobs: int = 1,
+    grid_cell_km: int = 2,
+    skip_empty_counties: bool = True,
+) -> list[CountyTrajectoryPack]:
+    """按 Excel 等提供的 (state, county) 列表批量准备轨迹包；全美 EVCS 只加载一次。"""
+    cleaned = [(s.strip(), c.strip()) for s, c in state_county_pairs if s.strip() and c.strip()]
+    if not cleaned:
+        raise ValueError("state_county_pairs is empty.")
+
+    events_all = load_evcs_events(pkl_path, state=None)
+
+    def one(pair: tuple[str, str]) -> CountyTrajectoryPack | None:
+        state_name, county_name = pair
+        try:
+            ev, gr, m = prepare_county_dataset(
+                pkl_path,
+                usa_map_path,
+                state_name,
+                county_name,
+                worldpop_tif_path,
+                gdp_tif_path,
+                gdp_band_1based,
+                poi_geoparquet_path,
+                highway_geojson_path,
+                grid_subsample_mod=grid_subsample_mod,
+                prune_zero_activity_grids=prune_zero_activity_grids,
+                cache_dir=cache_dir,
+                use_cache=use_cache,
+                grid_cell_km=grid_cell_km,
+                events_all=events_all,
+            )
+        except ValueError as exc:
+            if skip_empty_counties and "No EVCS events" in str(exc):
+                print(
+                    f"[IRL_data] skip {state_name} / {county_name}: {exc}",
+                    flush=True,
+                )
+                return None
+            raise
+        return CountyTrajectoryPack(
+            county_name=county_name,
+            state_name=state_name,
+            events=ev,
+            grids=gr,
+            grid_prune_meta=m,
+            grid_origin=gr.attrs.get("grid_origin"),
+        )
+
+    workers = max(1, int(n_jobs))
+    if workers <= 1 or len(cleaned) <= 1:
+        raw = [one(pair) for pair in cleaned]
+    elif Parallel is not None and delayed is not None:
+        raw = Parallel(n_jobs=min(workers, len(cleaned)), prefer="threads")(
+            delayed(one)(pair) for pair in cleaned
+        )
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, len(cleaned))) as ex:
+            raw = list(ex.map(one, cleaned))
+
+    packs = [p for p in raw if p is not None]
+    if not packs:
+        raise ValueError("No county packs produced (all counties empty or skipped).")
     return packs

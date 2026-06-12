@@ -16,6 +16,8 @@ class Transition:
     mask: np.ndarray
     next_mask: np.ndarray
     county_id: int = 0
+    state_id: int = 0
+    county_meta: np.ndarray | None = None
     is_expert: bool = False
 
 
@@ -42,6 +44,8 @@ class StratifiedReplayBuffer:
         mask: np.ndarray,
         next_mask: np.ndarray,
         county_ids: np.ndarray,
+        state_ids: np.ndarray | None = None,
+        county_meta: np.ndarray | None = None,
     ) -> None:
         n = int(obs.shape[0])
         for i in range(n):
@@ -53,6 +57,12 @@ class StratifiedReplayBuffer:
                 mask=mask[i].copy(),
                 next_mask=next_mask[i].copy(),
                 county_id=int(county_ids[i]),
+                state_id=int(state_ids[i]) if state_ids is not None else 0,
+                county_meta=(
+                    county_meta[i].copy()
+                    if county_meta is not None
+                    else None
+                ),
                 is_expert=True,
             )
             self._expert.append(t)
@@ -96,6 +106,13 @@ class StratifiedReplayBuffer:
         next_mask = np.stack([p.next_mask for p in picks])
         is_expert = np.asarray([p.is_expert for p in picks], dtype=bool)
         county_ids = np.asarray([p.county_id for p in picks], dtype=np.int64)
+        state_ids = np.asarray([p.state_id for p in picks], dtype=np.int64)
+        county_meta = np.stack(
+            [
+                p.county_meta if p.county_meta is not None else np.zeros(5, dtype=np.float32)
+                for p in picks
+            ]
+        )
 
         if self.spatial:
             obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).permute(0, 3, 1, 2)
@@ -113,4 +130,6 @@ class StratifiedReplayBuffer:
             "next_mask": torch.as_tensor(next_mask, dtype=torch.bool, device=device),
             "is_expert": torch.as_tensor(is_expert, dtype=torch.bool, device=device),
             "county_ids": torch.as_tensor(county_ids, dtype=torch.long, device=device),
+            "state_ids": torch.as_tensor(state_ids, dtype=torch.long, device=device),
+            "county_meta": torch.as_tensor(county_meta, dtype=torch.float32, device=device),
         }

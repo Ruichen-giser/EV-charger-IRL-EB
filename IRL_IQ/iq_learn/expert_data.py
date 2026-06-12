@@ -20,6 +20,7 @@ from iq_learn.grid_align import (
     pad_mask_flat,
     pad_obs_hwc,
 )
+from county_meta import compute_county_meta_from_npz, state_name_to_id
 from obs_channels import DEFAULT_OBS_CHANNELS, ObsChannelConfig
 
 
@@ -45,13 +46,16 @@ def expert_action_sequence(expert_actions: np.ndarray, grid_w: int) -> np.ndarra
 
 @dataclass
 class CountyLayout:
-    county_id: int
+    county_id: int  # location_id：唯一 (state, county) 对
+    state_id: int
+    state_name: str
     county_name: str
     grid_npz: str
     H: int
     W: int
     cell_km: float
     n_obs_channels: int
+    county_meta: np.ndarray | None = None  # (5,) float32
     flat_grid_w: int | None = None  # 联合训练画布宽；None 表示用本地 W
 
     @property
@@ -101,6 +105,8 @@ class MergedExpertDataset:
     mask: np.ndarray
     next_mask: np.ndarray
     county_ids: np.ndarray
+    state_ids: np.ndarray
+    county_meta: np.ndarray
     canvas: JointGridCanvas
     counties: list[CountyLayout]
     meta: dict = field(default_factory=dict)
@@ -121,6 +127,8 @@ class MergedExpertDataset:
             "mask": torch.as_tensor(self.mask[idx], dtype=torch.bool, device=device),
             "next_mask": torch.as_tensor(self.next_mask[idx], dtype=torch.bool, device=device),
             "county_ids": torch.as_tensor(self.county_ids[idx], dtype=torch.long, device=device),
+            "state_ids": torch.as_tensor(self.state_ids[idx], dtype=torch.long, device=device),
+            "county_meta": torch.as_tensor(self.county_meta[idx], dtype=torch.float32, device=device),
             "is_expert": torch.ones(len(idx), dtype=torch.bool, device=device),
         }
         return batch
@@ -130,6 +138,7 @@ def collect_county_expert_batch(
     grid_npz: str,
     county_id: int,
     *,
+    state_id: int | None = None,
     channel_cfg: ObsChannelConfig | None = None,
 ) -> CountyExpertBatch:
     ch = channel_cfg or DEFAULT_OBS_CHANNELS
@@ -175,14 +184,24 @@ def collect_county_expert_batch(
     if not obs_list:
         raise ValueError(f"无有效专家转移: {grid_npz}")
 
+    meta_vec = compute_county_meta_from_npz(grid_npz)
+    if state_id is not None:
+        sid = int(state_id)
+    elif base.state_name:
+        sid = state_name_to_id(base.state_name)
+    else:
+        raise ValueError(f"无法确定 state_id: npz 缺少 state_name ({grid_npz})")
     layout = CountyLayout(
         county_id=int(county_id),
+        state_id=sid,
+        state_name=base.state_name,
         county_name=base.county_name,
         grid_npz=str(grid_npz),
         H=int(base.H),
         W=int(base.W),
         cell_km=float(base.cell_km),
         n_obs_channels=int(ch.n_channels),
+        county_meta=meta_vec,
     )
     return CountyExpertBatch(
         obs=np.stack(obs_list),
@@ -215,9 +234,16 @@ def merge_county_expert_batches(
     mask_parts: list[np.ndarray] = []
     next_mask_parts: list[np.ndarray] = []
     id_parts: list[int] = []
+    state_id_parts: list[int] = []
+    meta_parts: list[np.ndarray] = []
 
     for batch in batches:
         layout = batch.layout
+        meta_vec = (
+            layout.county_meta
+            if layout.county_meta is not None
+            else compute_county_meta_from_npz(layout.grid_npz)
+        )
         n = int(batch.obs.shape[0])
         for i in range(n):
             obs_parts.append(pad_obs_hwc(batch.obs[i], canvas))
@@ -229,6 +255,8 @@ def merge_county_expert_batches(
             mask_parts.append(pad_mask_flat(batch.mask_local[i], layout.H, layout.W, canvas))
             next_mask_parts.append(pad_mask_flat(batch.next_mask_local[i], layout.H, layout.W, canvas))
             id_parts.append(int(layout.county_id))
+            state_id_parts.append(int(layout.state_id))
+            meta_parts.append(np.asarray(meta_vec, dtype=np.float32))
 
     merged = MergedExpertDataset(
         obs=np.stack(obs_parts),
@@ -238,6 +266,8 @@ def merge_county_expert_batches(
         mask=np.stack(mask_parts),
         next_mask=np.stack(next_mask_parts),
         county_ids=np.asarray(id_parts, dtype=np.int64),
+        state_ids=np.asarray(state_id_parts, dtype=np.int64),
+        county_meta=np.stack(meta_parts).astype(np.float32),
         canvas=canvas,
         counties=counties,
         meta={
@@ -249,10 +279,17 @@ def merge_county_expert_batches(
             "counties": [
                 {
                     "county_id": c.county_id,
+                    "state_id": c.state_id,
+                    "state_name": c.state_name,
                     "county_name": c.county_name,
                     "H": c.H,
                     "W": c.W,
                     "grid_npz": c.grid_npz,
+                    "county_meta": (
+                        c.county_meta.tolist()
+                        if c.county_meta is not None
+                        else compute_county_meta_from_npz(c.grid_npz).tolist()
+                    ),
                 }
                 for c in counties
             ],
@@ -265,11 +302,17 @@ def build_merged_expert_dataset(
     grid_npz_paths: list[str],
     *,
     channel_cfg: ObsChannelConfig | None = None,
+    state_ids: list[int] | None = None,
+    county_ids: list[int] | None = None,
 ) -> MergedExpertDataset:
-    """从多个县 npz 收集并 pool 专家数据。"""
+    """从多个 state-county npz 收集并 pool 专家数据。"""
     batches: list[CountyExpertBatch] = []
-    for cid, path in enumerate(grid_npz_paths):
-        batches.append(collect_county_expert_batch(path, cid, channel_cfg=channel_cfg))
+    for i, path in enumerate(grid_npz_paths):
+        cid = int(county_ids[i]) if county_ids is not None else int(i)
+        sid = int(state_ids[i]) if state_ids is not None else None
+        batches.append(
+            collect_county_expert_batch(path, cid, state_id=sid, channel_cfg=channel_cfg)
+        )
     merged = merge_county_expert_batches(batches)
     for layout in merged.counties:
         layout.flat_grid_w = merged.canvas.max_w

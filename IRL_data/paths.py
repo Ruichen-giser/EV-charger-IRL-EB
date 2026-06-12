@@ -9,6 +9,7 @@ DEFAULT_PREPARED_DATA_DIR = OUTPUTS_DIR / "prepared_data"
 DEFAULT_PREPARED_DATA_PKL = DEFAULT_PREPARED_DATA_DIR / "prepared_irl_dataset.pkl"
 DEFAULT_CACHE_DIR = DEFAULT_PREPARED_DATA_DIR / "cache"
 DEFAULT_GRID_NPZ_DIR = DEFAULT_PREPARED_DATA_DIR / "grid_tensors"
+DEFAULT_MDP_GE5_COUNTY_LIST_XLSX = DATA_ROOT / "us_mdp_ge5_state_county_list.xlsx"
 
 
 def validate_project_layout() -> None:

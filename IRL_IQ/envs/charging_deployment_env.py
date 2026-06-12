@@ -55,7 +55,12 @@ class ChargingDeploymentEnv(gym.Env):
         if expert_actions is None and "expert_actions" in blob:
             expert_actions = blob["expert_actions"].astype(np.int64)
         self.cell_km = float(blob["grid_cell_km"]) if grid_cell_km is None else float(grid_cell_km)
-        self.county_name = str(blob["county_name"][0]) if "county_name" in blob else path.stem
+        self.state_name = str(blob["state_name"][0]) if "state_name" in blob else ""
+        if "county_name" in blob:
+            self.county_name = str(blob["county_name"][0])
+        else:
+            stem = path.stem.replace("_grid_cropped", "").replace("_grid_features", "")
+            self.county_name = stem.split("__")[-1].replace("_", " ") if "__" in stem else stem
 
         if self.grid_features.ndim != 3 or self.grid_features.shape[2] != 5:
             raise ValueError(f"grid_features 须为 (H,W,5)，当前 {self.grid_features.shape}")
@@ -111,7 +116,7 @@ class ChargingDeploymentEnv(gym.Env):
         self.stations = np.zeros((self.H, self.W), dtype=bool)
         self.current_dist_matrix = None
         self.current_step = 0
-        return self._get_obs(), {"county_name": self.county_name}
+        return self._get_obs(), {"state_name": self.state_name, "county_name": self.county_name}
 
     def step(self, action: int):
         gx, gy = self._action_to_xy(action)

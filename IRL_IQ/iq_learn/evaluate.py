@@ -38,6 +38,11 @@ def _set_agent_eval(agent: DiscreteSoftQAgent) -> None:
     agent.target_net.eval()
 
 
+def _restore_agent_train(agent: DiscreteSoftQAgent) -> None:
+    agent.q_net.train()
+    agent.target_net.train()
+
+
 def _station_was_placed(info: dict[str, Any]) -> bool:
     if info.get("invalid_action"):
         return False
@@ -52,13 +57,24 @@ def _agent_tensors(
     layout: CountyLayout,
     canvas: JointGridCanvas,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     obs_p = pad_obs_hwc(obs_hwc, canvas)
     mask_p = pad_mask_flat(mask_local, layout.H, layout.W, canvas)
     obs_t = torch.as_tensor(obs_p, dtype=torch.float32, device=device).permute(2, 0, 1).unsqueeze(0)
     mask_t = torch.as_tensor(mask_p, dtype=torch.bool, device=device).unsqueeze(0)
     county_t = torch.tensor([layout.county_id], dtype=torch.long, device=device)
-    return obs_t, mask_t, county_t
+    state_t = torch.tensor([layout.state_id], dtype=torch.long, device=device)
+    if layout.county_meta is not None:
+        meta_t = torch.as_tensor(layout.county_meta, dtype=torch.float32, device=device).unsqueeze(0)
+    else:
+        from county_meta import compute_county_meta_from_npz
+
+        meta_t = torch.as_tensor(
+            compute_county_meta_from_npz(layout.grid_npz),
+            dtype=torch.float32,
+            device=device,
+        ).unsqueeze(0)
+    return obs_t, mask_t, county_t, state_t, meta_t
 
 
 def _expert_deployed_sequence(
@@ -113,9 +129,11 @@ def evaluate_joint_expert_rollin(
         a_local = int(a_expert_local)
         a_canvas = local_action_to_canvas(a_local, layout.W, canvas.max_w)
 
-        obs_t, mask_t, county_t = _agent_tensors(obs, mask_local, layout, canvas, agent.device)
-        scores = agent.q_net(obs_t, county_t)
-        pred_canvas = int(agent.predict_action(obs_t, mask_t, county_t))
+        obs_t, mask_t, county_t, state_t, meta_t = _agent_tensors(
+            obs, mask_local, layout, canvas, agent.device
+        )
+        scores = agent.q_net(obs_t, state_t, meta_t, county_t)
+        pred_canvas = int(agent.predict_action(obs_t, mask_t, state_t, meta_t, county_t))
 
         if bool(mask_local[a_local]):
             expert_actions.append(a_canvas)
@@ -178,8 +196,10 @@ def evaluate_joint_policy_rollout(
         if not bool(np.any(mask_local)):
             break
 
-        obs_t, mask_t, county_t = _agent_tensors(obs, mask_local, layout, canvas, agent.device)
-        pred_canvas = int(agent.predict_action(obs_t, mask_t, county_t))
+        obs_t, mask_t, county_t, state_t, meta_t = _agent_tensors(
+            obs, mask_local, layout, canvas, agent.device
+        )
+        pred_canvas = int(agent.predict_action(obs_t, mask_t, state_t, meta_t, county_t))
         local_action = canvas_action_to_local(pred_canvas, layout.H, layout.W, canvas.max_w)
         if local_action is None:
             break
@@ -223,12 +243,28 @@ def evaluate_joint_all(
     counties: list[CountyLayout],
     canvas: JointGridCanvas,
     channel_cfg: ObsChannelConfig,
+    *,
+    max_counties: int | None = None,
+    rng: np.random.Generator | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """逐县评估并返回 per_county 列表与跨县平均核心指标。"""
+    targets = list(counties)
+    if max_counties is not None and int(max_counties) > 0 and len(targets) > int(max_counties):
+        rng = rng or np.random.default_rng()
+        idx = rng.choice(len(targets), size=int(max_counties), replace=False)
+        targets = [targets[int(i)] for i in idx]
+
     per: list[dict[str, Any]] = []
-    for layout in counties:
+    for layout in targets:
         ev = evaluate_joint_county(agent, layout, canvas, channel_cfg)
-        per.append({"county_name": layout.county_name, **ev})
+        per.append(
+            {
+                "state_name": layout.state_name,
+                "county_name": layout.county_name,
+                "location_key": f"{layout.state_name}/{layout.county_name}",
+                **ev,
+            }
+        )
 
     match_rates = [float(r["expert_rollin_expert_greedy_match_rate"]) for r in per]
     dists = [float(r["expert_rollin_mean_distance_km"]) for r in per]
@@ -236,5 +272,5 @@ def evaluate_joint_all(
         "mean_expert_match_rate": float(np.mean(match_rates)) if match_rates else 0.0,
         "mean_distance_km": float(np.mean(dists)) if dists else 0.0,
     }
-    agent.q_net.train()
+    _restore_agent_train(agent)
     return per, summary
