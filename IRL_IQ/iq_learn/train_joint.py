@@ -31,7 +31,7 @@ from state_county import StateCountyPair, build_global_residual_index, build_loc
 from iq_learn.discrete_soft_q import DiscreteSoftQAgent
 from iq_learn.evaluate import evaluate_joint_all
 from iq_learn.metrics import aggregate_joint_eval_metrics, build_joint_final_eval, format_eval_log
-from iq_learn.expert_data import build_merged_expert_dataset
+from iq_learn.expert_data import build_merged_expert_dataset, concat_training_batches
 from iq_learn.embedding_export import export_location_embeddings
 from iq_learn.plotting import plot_iq_metrics
 from iq_learn.policy_rollout import JointPolicyRolloutPool, warm_start_joint_policy_buffer
@@ -64,7 +64,7 @@ class JointTrainConfig:
     use_chi: bool = True
     iq_loss_mode: str = DEFAULT_IQ_LOSS_MODE
     lr: float = 5e-5
-    batch_size: int = 64
+    batch_size: int = 8
     train_steps: int = 50_000
     eval_every: int = 200
     target_update_interval: int = 15
@@ -86,6 +86,37 @@ class JointTrainConfig:
     eval_final_max_counties: int = DEFAULT_EVAL_FINAL_MAX_COUNTIES
     rollout_max_sessions: int = DEFAULT_ROLLOUT_MAX_SESSIONS
     verbose: int = 1
+
+
+def _sample_train_batch(
+    *,
+    merged,
+    buffer: StratifiedReplayBuffer | None,
+    batch_size: int,
+    expert_fraction: float,
+    device: torch.device,
+    rng: np.random.Generator,
+) -> dict[str, torch.Tensor]:
+    bs = int(batch_size)
+    if buffer is None:
+        return merged.sample(bs, device, rng)
+
+    n_pol_avail = len(buffer._policy)
+    if n_pol_avail <= 0:
+        return merged.sample(bs, device, rng)
+
+    n_exp = max(1, int(round(bs * float(expert_fraction))))
+    n_exp = min(n_exp, len(merged), bs)
+    n_pol = bs - n_exp
+    if n_pol > n_pol_avail:
+        n_pol = n_pol_avail
+        n_exp = bs - n_pol
+
+    expert_batch = merged.sample(n_exp, device, rng)
+    if n_pol <= 0:
+        return expert_batch
+    policy_batch = buffer.sample_policy_only(n_pol, device, rng)
+    return concat_training_batches(expert_batch, policy_batch)
 
 
 def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, Any]]:
@@ -157,32 +188,15 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
     )
 
     n_expert = len(merged)
-    expert_cap = max(n_expert, 100_000)
-    buffer = StratifiedReplayBuffer(
-        capacity_expert=expert_cap,
-        capacity_policy=int(cfg.policy_buffer_capacity),
-        expert_fraction=float(cfg.expert_batch_fraction),
-        spatial=True,
-    )
-    buffer.add_expert_from_merged(
-        merged.obs,
-        merged.next_obs,
-        merged.actions,
-        merged.done,
-        merged.mask,
-        merged.next_mask,
-        merged.county_ids,
-        merged.state_ids,
-        merged.county_meta,
-    )
-    if len(buffer._expert) < n_expert and cfg.verbose:
-        print(
-            f"[EB-IQ] 警告: 专家 buffer 容量 {expert_cap} < 合并专家转移 {n_expert}，"
-            f"仅保留 {len(buffer._expert)} 条",
-            flush=True,
-        )
-
     use_policy_rollout = str(cfg.iq_loss_mode).strip().lower() == "online"
+    buffer: StratifiedReplayBuffer | None = None
+    if use_policy_rollout:
+        buffer = StratifiedReplayBuffer(
+            capacity_expert=0,
+            capacity_policy=int(cfg.policy_buffer_capacity),
+            expert_fraction=float(cfg.expert_batch_fraction),
+            spatial=True,
+        )
     rollout_pool: JointPolicyRolloutPool | None = None
     if use_policy_rollout:
         if not cfg.use_stratified_buffer:
@@ -221,6 +235,17 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
             f"IQ={cfg.iq_loss_mode}",
             flush=True,
         )
+        canvas_cells = int(canvas.max_h) * int(canvas.max_w)
+        if canvas_cells > 10_000 and int(cfg.batch_size) > 8:
+            print(
+                f"[EB-IQ] 提示: 大画布 ({canvas.max_h}×{canvas.max_w}) 建议 "
+                f"--batch-size 4~8（当前 {cfg.batch_size}），12GB GPU 易 OOM",
+                flush=True,
+            )
+        print(
+            f"[EB-IQ] 专家数据 lazy 存储（采样时 pad），避免 ~60GB 全画布缓存",
+            flush=True,
+        )
         preview = counties if len(counties) <= 8 else counties[:3]
         for c in preview:
             print(
@@ -231,11 +256,21 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         if len(counties) > len(preview):
             print(f"  ... 共 {len(counties)} 县", flush=True)
 
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     for step in range(1, int(cfg.train_steps) + 1):
         if rollout_pool is not None:
             rollout_pool.collect_one_step(agent, buffer, rng, stochastic=True)
 
-        batch = buffer.sample(int(cfg.batch_size), agent.device, rng)
+        batch = _sample_train_batch(
+            merged=merged,
+            buffer=buffer,
+            batch_size=int(cfg.batch_size),
+            expert_fraction=float(cfg.expert_batch_fraction),
+            device=agent.device,
+            rng=rng,
+        )
         m = agent.train_step(batch)
 
         if step % eval_every != 0:

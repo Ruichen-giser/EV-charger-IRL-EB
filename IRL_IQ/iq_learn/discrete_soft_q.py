@@ -180,6 +180,8 @@ class DiscreteSoftQAgent:
         for p in self.target_net.parameters():
             p.requires_grad = False
         self.optimizer = torch.optim.Adam(self.q_net.parameters(), lr=float(lr))
+        self.use_amp = self.device.type == "cuda"
+        self._scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
 
     def train_step(self, batch: dict[str, torch.Tensor]) -> dict[str, float]:
         self.q_net.train()
@@ -195,20 +197,23 @@ class DiscreteSoftQAgent:
         county_meta = batch.get("county_meta")
         county_ids = batch.get("county_ids")
 
-        q_all = self.q_net(obs, state_ids, county_meta, county_ids)
-        q_sa = q_all.gather(1, actions.long())
-        v_s = self.q_net.soft_value(obs, mask, self.alpha, state_ids, county_meta, county_ids)
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            q_all = self.q_net(obs, state_ids, county_meta, county_ids)
+            q_sa = q_all.gather(1, actions.long())
+            v_s = masked_soft_value(q_all, mask, self.alpha)
 
         with torch.no_grad():
-            next_v = self.target_net.soft_value(
-                next_obs, next_mask, self.alpha, state_ids, county_meta, county_ids
-            )
-            entropy = float(soft_policy_entropy(q_all, mask, self.alpha).detach())
+            with torch.cuda.amp.autocast(enabled=self.use_amp):
+                next_v = self.target_net.soft_value(
+                    next_obs, next_mask, self.alpha, state_ids, county_meta, county_ids
+                )
+            entropy = float(soft_policy_entropy(q_all.float(), mask, self.alpha).detach().cpu())
+            q_stats = q_all.detach().float()
             if is_expert is not None:
                 m_all = is_expert.view(-1).bool()
-                q_valid = q_all[m_all][mask[m_all]] if bool(m_all.any()) else q_all.new_zeros(0)
+                q_valid = q_stats[m_all][mask[m_all]] if bool(m_all.any()) else q_stats.new_zeros(0)
             else:
-                q_valid = q_all[mask]
+                q_valid = q_stats[mask]
 
         if self.iq_loss_mode == "online":
             m = is_expert.view(-1).bool() if is_expert is not None else None
@@ -244,11 +249,18 @@ class DiscreteSoftQAgent:
                 "policy_entropy": entropy,
             }
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         if torch.isfinite(loss):
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), max_norm=10.0)
-            self.optimizer.step()
+            if self.use_amp:
+                self._scaler.scale(loss).backward()
+                self._scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), max_norm=10.0)
+                self._scaler.step(self.optimizer)
+                self._scaler.update()
+            else:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), max_norm=10.0)
+                self.optimizer.step()
         else:
             metrics["skipped_step"] = 1.0
 
@@ -259,9 +271,9 @@ class DiscreteSoftQAgent:
         metrics.update(
             {
                 "loss": float(loss.detach()),
-                "Q_mean": float(q_valid.mean().detach()) if q_valid.numel() else 0.0,
-                "Q_std": float(q_valid.std().detach()) if q_valid.numel() > 1 else 0.0,
-                "Q_max": float(q_valid.max().detach()) if q_valid.numel() else 0.0,
+                "Q_mean": float(q_valid.mean().cpu()) if q_valid.numel() else 0.0,
+                "Q_std": float(q_valid.std().cpu()) if q_valid.numel() > 1 else 0.0,
+                "Q_max": float(q_valid.max().cpu()) if q_valid.numel() else 0.0,
                 "policy_entropy": entropy,
             }
         )

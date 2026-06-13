@@ -94,16 +94,49 @@ class CountyExpertBatch:
     layout: CountyLayout
 
 
+def _spatial_batch_from_numpy(
+    obs: np.ndarray,
+    next_obs: np.ndarray,
+    actions: np.ndarray,
+    done: np.ndarray,
+    mask: np.ndarray,
+    next_mask: np.ndarray,
+    county_ids: np.ndarray,
+    state_ids: np.ndarray,
+    county_meta: np.ndarray,
+    *,
+    device: torch.device,
+    is_expert: bool = True,
+) -> dict[str, torch.Tensor]:
+    return {
+        "obs": torch.as_tensor(obs, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+        "next_obs": torch.as_tensor(next_obs, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
+        "actions": torch.as_tensor(actions, dtype=torch.long, device=device),
+        "done": torch.as_tensor(done, dtype=torch.float32, device=device),
+        "mask": torch.as_tensor(mask, dtype=torch.bool, device=device),
+        "next_mask": torch.as_tensor(next_mask, dtype=torch.bool, device=device),
+        "county_ids": torch.as_tensor(county_ids, dtype=torch.long, device=device),
+        "state_ids": torch.as_tensor(state_ids, dtype=torch.long, device=device),
+        "county_meta": torch.as_tensor(county_meta, dtype=torch.float32, device=device),
+        "is_expert": torch.full((int(obs.shape[0]),), bool(is_expert), dtype=torch.bool, device=device),
+    }
+
+
+def concat_training_batches(
+    a: dict[str, torch.Tensor],
+    b: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    return {key: torch.cat([a[key], b[key]], dim=0) for key in a}
+
+
 @dataclass
 class MergedExpertDataset:
-    """多县 pool 后、画布对齐的专家数据集。"""
+    """多县专家数据集：保留各县本地网格，采样时再 pad 到联合画布（省内存）。"""
 
-    obs: np.ndarray
-    next_obs: np.ndarray
+    batches: list[CountyExpertBatch]
+    global_index: np.ndarray
     actions: np.ndarray
     done: np.ndarray
-    mask: np.ndarray
-    next_mask: np.ndarray
     county_ids: np.ndarray
     state_ids: np.ndarray
     county_meta: np.ndarray
@@ -112,26 +145,55 @@ class MergedExpertDataset:
     meta: dict = field(default_factory=dict)
 
     def __len__(self) -> int:
-        return int(self.obs.shape[0])
+        return int(self.global_index.shape[0])
+
+    def _pad_indices(self, idx: np.ndarray) -> tuple[np.ndarray, ...]:
+        bs = int(idx.shape[0])
+        h = int(self.canvas.max_h)
+        w = int(self.canvas.max_w)
+        na = int(self.canvas.n_actions)
+        n_ch = int(self.batches[0].obs.shape[-1])
+        obs = np.empty((bs, h, w, n_ch), dtype=np.float32)
+        next_obs = np.empty((bs, h, w, n_ch), dtype=np.float32)
+        mask = np.empty((bs, na), dtype=bool)
+        next_mask = np.empty((bs, na), dtype=bool)
+        for j, gi in enumerate(idx):
+            b_idx, local_i = (int(self.global_index[gi, 0]), int(self.global_index[gi, 1]))
+            batch = self.batches[b_idx]
+            layout = batch.layout
+            obs[j] = pad_obs_hwc(batch.obs[local_i], self.canvas)
+            next_obs[j] = pad_obs_hwc(batch.next_obs[local_i], self.canvas)
+            mask[j] = pad_mask_flat(batch.mask_local[local_i], layout.H, layout.W, self.canvas)
+            next_mask[j] = pad_mask_flat(batch.next_mask_local[local_i], layout.H, layout.W, self.canvas)
+        return (
+            obs,
+            next_obs,
+            self.actions[idx],
+            self.done[idx],
+            mask,
+            next_mask,
+            self.county_ids[idx],
+            self.state_ids[idx],
+            self.county_meta[idx],
+        )
 
     def sample(self, batch_size: int, device: torch.device, rng: np.random.Generator) -> dict[str, torch.Tensor]:
         n = len(self)
         idx = rng.integers(0, n, size=min(int(batch_size), n))
-        obs = self.obs[idx]
-        next_obs = self.next_obs[idx]
-        batch: dict[str, torch.Tensor] = {
-            "obs": torch.as_tensor(obs, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-            "next_obs": torch.as_tensor(next_obs, dtype=torch.float32, device=device).permute(0, 3, 1, 2),
-            "actions": torch.as_tensor(self.actions[idx], dtype=torch.long, device=device),
-            "done": torch.as_tensor(self.done[idx], dtype=torch.float32, device=device),
-            "mask": torch.as_tensor(self.mask[idx], dtype=torch.bool, device=device),
-            "next_mask": torch.as_tensor(self.next_mask[idx], dtype=torch.bool, device=device),
-            "county_ids": torch.as_tensor(self.county_ids[idx], dtype=torch.long, device=device),
-            "state_ids": torch.as_tensor(self.state_ids[idx], dtype=torch.long, device=device),
-            "county_meta": torch.as_tensor(self.county_meta[idx], dtype=torch.float32, device=device),
-            "is_expert": torch.ones(len(idx), dtype=torch.bool, device=device),
-        }
-        return batch
+        obs, next_obs, actions, done, mask, next_mask, county_ids, state_ids, county_meta = self._pad_indices(idx)
+        return _spatial_batch_from_numpy(
+            obs,
+            next_obs,
+            actions,
+            done,
+            mask,
+            next_mask,
+            county_ids,
+            state_ids,
+            county_meta,
+            device=device,
+            is_expert=True,
+        )
 
 
 def collect_county_expert_batch(
@@ -229,17 +291,14 @@ def merge_county_expert_batches(
     if canvas is None:
         canvas = build_canvas([c.H for c in counties], [c.W for c in counties])
 
-    obs_parts: list[np.ndarray] = []
-    next_parts: list[np.ndarray] = []
+    index_rows: list[tuple[int, int]] = []
     act_parts: list[int] = []
     done_parts: list[np.ndarray] = []
-    mask_parts: list[np.ndarray] = []
-    next_mask_parts: list[np.ndarray] = []
     id_parts: list[int] = []
     state_id_parts: list[int] = []
     meta_parts: list[np.ndarray] = []
 
-    for batch in batches:
+    for b_idx, batch in enumerate(batches):
         layout = batch.layout
         meta_vec = (
             layout.county_meta
@@ -248,25 +307,20 @@ def merge_county_expert_batches(
         )
         n = int(batch.obs.shape[0])
         for i in range(n):
-            obs_parts.append(pad_obs_hwc(batch.obs[i], canvas))
-            next_parts.append(pad_obs_hwc(batch.next_obs[i], canvas))
+            index_rows.append((b_idx, i))
             act_parts.append(
                 local_action_to_canvas(int(batch.actions_local[i]), layout.W, canvas.max_w)
             )
             done_parts.append(batch.done[i])
-            mask_parts.append(pad_mask_flat(batch.mask_local[i], layout.H, layout.W, canvas))
-            next_mask_parts.append(pad_mask_flat(batch.next_mask_local[i], layout.H, layout.W, canvas))
             id_parts.append(int(layout.county_id))
             state_id_parts.append(int(layout.state_id))
             meta_parts.append(np.asarray(meta_vec, dtype=np.float32))
 
     merged = MergedExpertDataset(
-        obs=np.stack(obs_parts),
-        next_obs=np.stack(next_parts),
+        batches=batches,
+        global_index=np.asarray(index_rows, dtype=np.int32),
         actions=np.asarray(act_parts, dtype=np.int64).reshape(-1, 1),
         done=np.stack(done_parts),
-        mask=np.stack(mask_parts),
-        next_mask=np.stack(next_mask_parts),
         county_ids=np.asarray(id_parts, dtype=np.int64),
         state_ids=np.asarray(state_id_parts, dtype=np.int64),
         county_meta=np.stack(meta_parts).astype(np.float32),
@@ -274,7 +328,8 @@ def merge_county_expert_batches(
         counties=counties,
         meta={
             "n_counties": len(counties),
-            "n_transitions": len(obs_parts),
+            "n_transitions": len(index_rows),
+            "storage_mode": "lazy_pad_on_sample",
             "max_h": canvas.max_h,
             "max_w": canvas.max_w,
             "n_actions": canvas.n_actions,

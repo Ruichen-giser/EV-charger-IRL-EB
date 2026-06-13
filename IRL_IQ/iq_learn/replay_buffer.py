@@ -77,6 +77,52 @@ class StratifiedReplayBuffer:
         if len(self._policy) > self.capacity_policy:
             self._policy = self._policy[-self.capacity_policy :]
 
+    def sample_policy_only(
+        self,
+        batch_size: int,
+        device: torch.device,
+        rng: np.random.Generator,
+    ) -> dict[str, torch.Tensor]:
+        if not self._policy:
+            raise RuntimeError("策略 replay buffer 为空，无法采样")
+        bs = min(int(batch_size), len(self._policy))
+        idx = rng.integers(0, len(self._policy), size=bs)
+        picks = [self._policy[int(i)] for i in idx]
+        obs = np.stack([p.obs for p in picks])
+        next_obs = np.stack([p.next_obs for p in picks])
+        actions = np.asarray([p.action for p in picks], dtype=np.int64).reshape(-1, 1)
+        done = np.asarray([p.done for p in picks], dtype=np.float32).reshape(-1, 1)
+        mask = np.stack([p.mask for p in picks])
+        next_mask = np.stack([p.next_mask for p in picks])
+        county_ids = np.asarray([p.county_id for p in picks], dtype=np.int64)
+        state_ids = np.asarray([p.state_id for p in picks], dtype=np.int64)
+        county_meta = np.stack(
+            [
+                p.county_meta
+                if p.county_meta is not None
+                else np.zeros(COUNTY_META_DIM, dtype=np.float32)
+                for p in picks
+            ]
+        )
+        if self.spatial:
+            obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device).permute(0, 3, 1, 2)
+            next_t = torch.as_tensor(next_obs, dtype=torch.float32, device=device).permute(0, 3, 1, 2)
+        else:
+            obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device)
+            next_t = torch.as_tensor(next_obs, dtype=torch.float32, device=device)
+        return {
+            "obs": obs_t,
+            "next_obs": next_t,
+            "actions": torch.as_tensor(actions, dtype=torch.long, device=device),
+            "done": torch.as_tensor(done, dtype=torch.float32, device=device),
+            "mask": torch.as_tensor(mask, dtype=torch.bool, device=device),
+            "next_mask": torch.as_tensor(next_mask, dtype=torch.bool, device=device),
+            "is_expert": torch.zeros(bs, dtype=torch.bool, device=device),
+            "county_ids": torch.as_tensor(county_ids, dtype=torch.long, device=device),
+            "state_ids": torch.as_tensor(state_ids, dtype=torch.long, device=device),
+            "county_meta": torch.as_tensor(county_meta, dtype=torch.float32, device=device),
+        }
+
     def sample(self, batch_size: int, device: torch.device, rng: np.random.Generator) -> dict[str, torch.Tensor]:
         bs = int(batch_size)
         n_exp = max(1, int(round(bs * float(self.expert_fraction))))

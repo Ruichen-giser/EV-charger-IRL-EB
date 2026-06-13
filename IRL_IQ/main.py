@@ -64,7 +64,7 @@ class MainConfig:
     use_chi: bool = True
     iq_loss_mode: str = DEFAULT_IQ_LOSS_MODE
     lr: float = 5e-5
-    batch_size: int = 64
+    batch_size: int = 8
     train_steps: int = 50_000
     eval_every: int = 200
     eval_max_counties: int = DEFAULT_EVAL_MAX_COUNTIES
@@ -238,7 +238,7 @@ def main() -> None:
         default=DEFAULT_ROLLOUT_MAX_SESSIONS,
         help="iq-loss-mode=online 时 rollout 池活跃 session 上限",
     )
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--dropout", type=float, default=CNN_DROPOUT)
     parser.add_argument("--embed-dim", type=int, default=COUNTY_EMBED_DIM)
