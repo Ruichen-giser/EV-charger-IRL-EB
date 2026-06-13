@@ -28,11 +28,16 @@ from cnn_config import (  # noqa: E402
     CNN_DROPOUT,
     COUNTY_EMBED_DIM,
     COUNTY_META_DIM,
+    DEFAULT_BATCH_SIZE,
     DEFAULT_EVAL_FINAL_MAX_COUNTIES,
     DEFAULT_EVAL_MAX_COUNTIES,
+    DEFAULT_EVAL_EVERY,
     DEFAULT_IQ_LOSS_MODE,
+    DEFAULT_LR,
     DEFAULT_OBS_CHANNEL_NAMES,
     DEFAULT_ROLLOUT_MAX_SESSIONS,
+    DEFAULT_TRAIN_STEPS,
+    DEFAULT_TARGET_UPDATE_INTERVAL,
     DEV_STATE_COUNTIES_8,
     EMBED_DROPOUT,
     META_MLP_HIDDEN,
@@ -63,14 +68,14 @@ class MainConfig:
     alpha_reg: float = 0.5
     use_chi: bool = True
     iq_loss_mode: str = DEFAULT_IQ_LOSS_MODE
-    lr: float = 5e-5
-    batch_size: int = 8
-    train_steps: int = 50_000
-    eval_every: int = 200
+    lr: float = DEFAULT_LR
+    batch_size: int = DEFAULT_BATCH_SIZE
+    train_steps: int = DEFAULT_TRAIN_STEPS
+    eval_every: int = DEFAULT_EVAL_EVERY
     eval_max_counties: int = DEFAULT_EVAL_MAX_COUNTIES
     eval_final_max_counties: int = DEFAULT_EVAL_FINAL_MAX_COUNTIES
     rollout_max_sessions: int = DEFAULT_ROLLOUT_MAX_SESSIONS
-    target_update_interval: int = 15
+    target_update_interval: int = DEFAULT_TARGET_UPDATE_INTERVAL
     seed: int = 0
     device: str = "auto"
     dropout: float = CNN_DROPOUT
@@ -218,8 +223,8 @@ def main() -> None:
     )
     parser.add_argument("--grid-npz-dir", type=str, default=str(DEFAULT_GRID_NPZ_DIR))
     parser.add_argument("--output-dir", type=str, default=str(DEFAULT_IQ_OUTPUT_DIR))
-    parser.add_argument("--train-steps", type=int, default=50_000)
-    parser.add_argument("--eval-every", type=int, default=200)
+    parser.add_argument("--train-steps", type=int, default=DEFAULT_TRAIN_STEPS)
+    parser.add_argument("--eval-every", type=int, default=DEFAULT_EVAL_EVERY)
     parser.add_argument(
         "--eval-max-counties",
         type=int,
@@ -238,8 +243,8 @@ def main() -> None:
         default=DEFAULT_ROLLOUT_MAX_SESSIONS,
         help="iq-loss-mode=online 时 rollout 池活跃 session 上限",
     )
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--lr", type=float, default=DEFAULT_LR)
     parser.add_argument("--dropout", type=float, default=CNN_DROPOUT)
     parser.add_argument("--embed-dim", type=int, default=COUNTY_EMBED_DIM)
     parser.add_argument("--meta-dim", type=int, default=COUNTY_META_DIM)
@@ -251,6 +256,7 @@ def main() -> None:
         choices=("online", "offline"),
         help="offline=仅专家轨迹（默认）；online=专家+策略 rollout 混合",
     )
+    parser.add_argument("--target-update-interval", type=int, default=DEFAULT_TARGET_UPDATE_INTERVAL)
     parser.add_argument("--no-chi", action="store_true")
     parser.add_argument("--device", type=str, default="auto", choices=("auto", "cuda", "cpu", "mps"))
     parser.add_argument("--seed", type=int, default=0)
@@ -268,6 +274,7 @@ def main() -> None:
             eval_max_counties=int(args.eval_max_counties),
             eval_final_max_counties=int(args.eval_final_max_counties),
             rollout_max_sessions=int(args.rollout_max_sessions),
+            target_update_interval=int(args.target_update_interval),
             batch_size=int(args.batch_size),
             lr=float(args.lr),
             dropout=float(args.dropout),

@@ -15,11 +15,16 @@ from cnn_config import (
     CNN_DROPOUT,
     COUNTY_EMBED_DIM,
     COUNTY_META_DIM,
+    DEFAULT_BATCH_SIZE,
     DEFAULT_EVAL_FINAL_MAX_COUNTIES,
     DEFAULT_EVAL_MAX_COUNTIES,
+    DEFAULT_EVAL_EVERY,
     DEFAULT_IQ_LOSS_MODE,
+    DEFAULT_LR,
     DEFAULT_OBS_CHANNEL_NAMES,
     DEFAULT_ROLLOUT_MAX_SESSIONS,
+    DEFAULT_TRAIN_STEPS,
+    DEFAULT_TARGET_UPDATE_INTERVAL,
     EMBED_DROPOUT,
     META_MLP_HIDDEN,
     N_MAX_COUNTY_RESIDUAL,
@@ -63,11 +68,11 @@ class JointTrainConfig:
     alpha_reg: float = 0.5
     use_chi: bool = True
     iq_loss_mode: str = DEFAULT_IQ_LOSS_MODE
-    lr: float = 5e-5
-    batch_size: int = 8
-    train_steps: int = 50_000
-    eval_every: int = 200
-    target_update_interval: int = 15
+    lr: float = DEFAULT_LR
+    batch_size: int = DEFAULT_BATCH_SIZE
+    train_steps: int = DEFAULT_TRAIN_STEPS
+    eval_every: int = DEFAULT_EVAL_EVERY
+    target_update_interval: int = DEFAULT_TARGET_UPDATE_INTERVAL
     seed: int = 0
     device: str = "auto"
     dropout: float = CNN_DROPOUT
@@ -236,10 +241,10 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
             flush=True,
         )
         canvas_cells = int(canvas.max_h) * int(canvas.max_w)
-        if canvas_cells > 10_000 and int(cfg.batch_size) > 8:
+        if canvas_cells > 10_000 and int(cfg.batch_size) > 32:
             print(
-                f"[EB-IQ] 提示: 大画布 ({canvas.max_h}×{canvas.max_w}) 建议 "
-                f"--batch-size 4~8（当前 {cfg.batch_size}），12GB GPU 易 OOM",
+                f"[EB-IQ] 提示: 大画布 ({canvas.max_h}×{canvas.max_w}) batch_size={cfg.batch_size} "
+                f"可能超出 12GB GPU 显存，OOM 时请降至 8~16",
                 flush=True,
             )
         print(
