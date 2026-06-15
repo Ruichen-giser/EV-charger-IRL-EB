@@ -61,6 +61,7 @@ def _resolve_device(device: str) -> str:
 class JointTrainConfig:
     grid_npz_paths: list[str]
     output_dir: str
+    experiment: str = "baseline"
     state_counties: tuple[StateCountyPair, ...] = ()
     mdp_ge5_xlsx: str = ""
     gamma: float = 0.99
@@ -236,8 +237,8 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         print(
             f"[EB-IQ] 联合训练 {len(counties)} 县，画布 {canvas.max_h}×{canvas.max_w}，"
             f"专家转移 {len(merged)} 条，obs 通道 {channel_cfg.n_channels}，"
-            f"embed_dim={cfg.embed_dim} meta_dim={cfg.meta_dim} residual_alpha={cfg.residual_alpha}，"
-            f"IQ={cfg.iq_loss_mode}",
+            f"experiment={cfg.experiment} embed_dim={cfg.embed_dim} meta_dim={cfg.meta_dim} "
+            f"residual_alpha={cfg.residual_alpha}，IQ={cfg.iq_loss_mode}",
             flush=True,
         )
         canvas_cells = int(canvas.max_h) * int(canvas.max_w)
@@ -347,6 +348,7 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         )
 
     summary: dict[str, Any] = {
+        "experiment": str(cfg.experiment),
         "training_mode": (
             "joint_mdp_ge5_expert_only"
             if str(cfg.iq_loss_mode).strip().lower() == "offline"

@@ -32,7 +32,9 @@ EV-charger-IRL-EB/
 ├── IRL_BC/            # 单县 BC baseline
 └── outputs/
     ├── prepared_data/grid_tensors/
-    └── iq_output/joint_mdp_ge5/
+    └── iq_output/
+        ├── joint_mdp_ge5_baseline/   # 默认实验 baseline（residual_alpha=0）
+        └── joint_mdp_ge5_s1_residual/  # 实验 S1（residual_alpha=1）
 ```
 
 ## Quick start
@@ -66,9 +68,13 @@ python main.py --train-steps 50000 --device cuda
 
 ### 3. 输出
 
-- `outputs/iq_output/joint_mdp_ge5/iq_learn_shared.pt` — 最终共享 Q
-- `outputs/iq_output/joint_mdp_ge5/iq_learn_shared_best.pt` — 验证最优
-- `outputs/iq_output/joint_mdp_ge5/iq_learn_summary.json` — 含 `per_county_final`
+**baseline**（默认 `python IRL_IQ/main.py`）：
+
+- `outputs/iq_output/joint_mdp_ge5_baseline/iq_learn_shared.pt` — 最终共享 Q
+- `outputs/iq_output/joint_mdp_ge5_baseline/iq_learn_shared_best.pt` — 验证最优
+- `outputs/iq_output/joint_mdp_ge5_baseline/iq_learn_summary.json` — 含 `experiment` 与 `per_county_final`
+
+**S1**（`python IRL_IQ/main.py --experiment s1`）输出到 `outputs/iq_output/joint_mdp_ge5_s1_residual/`。
 
 ## 训练流程
 

@@ -20,8 +20,8 @@ if str(_PKG_ROOT) not in sys.path:
 from county_meta import compute_county_meta, state_name_to_id  # noqa: E402
 from models.county_location_embed import CountyLocationEmbed  # noqa: E402
 
-_DEFAULT_CKPT = _PKG_ROOT.parent / "outputs" / "iq_output" / "joint_mdp_ge5" / "iq_learn_shared.pt"
-_DEFAULT_OUT = _PKG_ROOT.parent / "outputs" / "iq_output" / "joint_mdp_ge5" / "embedding_analysis"
+_DEFAULT_CKPT = _PKG_ROOT.parent / "outputs" / "iq_output" / "joint_mdp_ge5_baseline" / "iq_learn_shared.pt"
+_DEFAULT_OUT = _PKG_ROOT.parent / "outputs" / "iq_output" / "joint_mdp_ge5_baseline" / "embedding_analysis"
 
 
 def _configure_plot_font() -> None:

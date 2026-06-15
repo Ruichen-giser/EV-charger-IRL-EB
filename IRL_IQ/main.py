@@ -1,6 +1,6 @@
-"""
-IRL_IQ-EB 入口：多县联合 IQ-Learn + SimpleGridCNN + state/county embedding。
+"""IRL_IQ-EB 入口：多县联合 IQ-Learn + SimpleGridCNN + state/county embedding。
 
+默认实验 S1（显式县残差 residual_alpha=1）；baseline：--experiment baseline。
 默认：MDP≥5 Excel 全量县（1149）联合训练；--dev-8-counties 为 8 县调试模式。
 """
 from __future__ import annotations
@@ -45,6 +45,12 @@ from cnn_config import (  # noqa: E402
     RESIDUAL_ALPHA,
 )
 from data_prep import prepare_state_counties_npz  # noqa: E402
+from experiment_config import (  # noqa: E402
+    DEFAULT_EXPERIMENT,
+    EXPERIMENT_CHOICES,
+    EXPERIMENT_DESCRIPTIONS,
+    resolve_experiment_settings,
+)
 from iq_learn.train_joint import JointTrainConfig, run_joint_training  # noqa: E402
 from county_meta import validate_socioeconomic_coverage  # noqa: E402
 from state_county import (  # noqa: E402
@@ -58,6 +64,7 @@ from state_county import (  # noqa: E402
 
 @dataclass
 class MainConfig:
+    experiment: str = DEFAULT_EXPERIMENT
     state_counties: tuple[StateCountyPair, ...] = ()
     mdp_ge5_xlsx: str = ""
     mdp_mode: str = "legacy"
@@ -102,6 +109,13 @@ def run_main(cfg: MainConfig) -> dict:
     else:
         print("[EB-IQ] mdp-mode=repeat：完整专家序列", flush=True)
 
+    exp = str(cfg.experiment).strip().lower()
+    print(
+        f"[EB-IQ] experiment={exp} | {EXPERIMENT_DESCRIPTIONS.get(exp, exp)} | "
+        f"residual_alpha={cfg.residual_alpha}",
+        flush=True,
+    )
+
     pairs = list(cfg.state_counties)
     if not pairs:
         raise ValueError("state_counties 为空，请检查县清单配置")
@@ -118,6 +132,7 @@ def run_main(cfg: MainConfig) -> dict:
 
     summary = run_joint_training(
         JointTrainConfig(
+            experiment=exp,
             grid_npz_paths=[str(p) for p in npz_paths],
             output_dir=str(out),
             state_counties=tuple(pairs),
@@ -196,6 +211,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="IRL_IQ-EB：联合 IQ-Learn + state/county embedding（默认 MDP≥5 全量县）"
     )
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default=DEFAULT_EXPERIMENT,
+        choices=EXPERIMENT_CHOICES,
+        help="baseline=state+meta（residual_alpha=0）；s1=显式县残差（residual_alpha=1）",
+    )
     parser.add_argument("--mdp-mode", type=str, default="legacy", choices=("legacy", "repeat"))
     parser.add_argument(
         "--dev-8-counties",
@@ -222,7 +244,7 @@ def main() -> None:
         help="兼容旧 API：逗号分隔县名（须配合 --state）",
     )
     parser.add_argument("--grid-npz-dir", type=str, default=str(DEFAULT_GRID_NPZ_DIR))
-    parser.add_argument("--output-dir", type=str, default=str(DEFAULT_IQ_OUTPUT_DIR))
+    parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--train-steps", type=int, default=DEFAULT_TRAIN_STEPS)
     parser.add_argument("--eval-every", type=int, default=DEFAULT_EVAL_EVERY)
     parser.add_argument(
@@ -248,7 +270,7 @@ def main() -> None:
     parser.add_argument("--dropout", type=float, default=CNN_DROPOUT)
     parser.add_argument("--embed-dim", type=int, default=COUNTY_EMBED_DIM)
     parser.add_argument("--meta-dim", type=int, default=COUNTY_META_DIM)
-    parser.add_argument("--residual-alpha", type=float, default=RESIDUAL_ALPHA)
+    parser.add_argument("--residual-alpha", type=float, default=None)
     parser.add_argument(
         "--iq-loss-mode",
         type=str,
@@ -261,14 +283,20 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="auto", choices=("auto", "cuda", "cpu", "mps"))
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
+    exp, residual_alpha, output_dir = resolve_experiment_settings(
+        experiment=str(args.experiment),
+        residual_alpha=args.residual_alpha,
+        output_dir=args.output_dir,
+    )
 
     run_main(
         MainConfig(
+            experiment=exp,
             state_counties=_resolve_state_counties(args),
             mdp_ge5_xlsx=str(args.mdp_ge5_xlsx),
             mdp_mode=str(args.mdp_mode),
             grid_npz_dir=args.grid_npz_dir,
-            output_dir=args.output_dir,
+            output_dir=output_dir,
             train_steps=int(args.train_steps),
             eval_every=int(args.eval_every),
             eval_max_counties=int(args.eval_max_counties),
@@ -280,7 +308,7 @@ def main() -> None:
             dropout=float(args.dropout),
             embed_dim=int(args.embed_dim),
             meta_dim=int(args.meta_dim),
-            residual_alpha=float(args.residual_alpha),
+            residual_alpha=float(residual_alpha),
             iq_loss_mode=str(args.iq_loss_mode),
             use_chi=not bool(args.no_chi),
             device=str(args.device),

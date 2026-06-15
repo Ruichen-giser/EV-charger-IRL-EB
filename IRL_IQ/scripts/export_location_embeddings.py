@@ -11,8 +11,8 @@ if str(_PKG_ROOT) not in sys.path:
 
 from iq_learn.embedding_export import export_location_embeddings  # noqa: E402
 
-_DEFAULT_CKPT = _PKG_ROOT.parent / "outputs" / "iq_output" / "joint_mdp_ge5" / "iq_learn_shared.pt"
-_DEFAULT_OUT = _PKG_ROOT.parent / "outputs" / "iq_output" / "joint_mdp_ge5" / "embedding_export"
+_DEFAULT_CKPT = _PKG_ROOT.parent / "outputs" / "iq_output" / "joint_mdp_ge5_baseline" / "iq_learn_shared.pt"
+_DEFAULT_OUT = _PKG_ROOT.parent / "outputs" / "iq_output" / "joint_mdp_ge5_baseline" / "embedding_export"
 
 
 def main() -> None:

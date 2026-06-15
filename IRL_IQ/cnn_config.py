@@ -30,6 +30,7 @@ COUNTY_EMBED_DIM = 16
 META_MLP_HIDDEN = 32
 N_US_STATES = 51
 N_MAX_COUNTY_RESIDUAL = 1149
+# baseline：仅 state + meta；S1 通过 --experiment s1 启用 residual_alpha=1.0
 RESIDUAL_ALPHA = 0.0
 EMBED_DROPOUT = 0.1
 

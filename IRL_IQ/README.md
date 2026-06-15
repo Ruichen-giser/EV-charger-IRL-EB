@@ -10,7 +10,16 @@ python main.py
 ```
 
 默认从 `data/us_mdp_ge5_state_county_list.xlsx` 加载 MDP≥5 县清单（1149），
-仅训练 `grid_tensors/` 中已有 npz 的县；输出到 `outputs/iq_output/joint_mdp_ge5/`。
+仅训练 `grid_tensors/` 中已有 npz 的县。
+
+## 实验预设
+
+| 实验 | 命令 | residual_alpha | 输出目录 |
+|------|------|----------------|----------|
+| **S1** 显式县残差（**默认**） | `python main.py` | 1.0 | `outputs/iq_output/joint_mdp_ge5_s1_residual/` |
+| **baseline** | `python main.py --experiment baseline` | 0.0 | `outputs/iq_output/joint_mdp_ge5_baseline/` |
+
+`iq_learn_summary.json` 会记录 `"experiment": "baseline"` 或 `"s1"`。
 
 8 县调试：`python main.py --dev-8-counties`
 
