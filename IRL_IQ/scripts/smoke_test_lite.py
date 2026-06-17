@@ -67,6 +67,8 @@ CKPT_REQUIRED_KEYS = {
     "n_states",
     "n_residual",
     "residual_alpha",
+    "embed_mode",
+    "film_hidden",
     "county_names",
     "location_labels",
 }

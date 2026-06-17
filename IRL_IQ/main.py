@@ -1,7 +1,8 @@
-"""IRL_IQ-EB 入口：多县联合 IQ-Learn + SimpleGridCNN + state/county embedding。
+"""IRL_IQ-EB 入口：多县联合 IQ-Learn + SimpleGridCNN + Bottleneck FiLM。
 
-默认实验 S1（显式县残差 residual_alpha=1）；baseline：--experiment baseline。
-默认：MDP≥5 Excel 全量县（1149）联合训练；--dev-8-counties 为 8 县调试模式。
+默认：experiment=baseline（residual_alpha=0）+ embed_mode=bottleneck_film。
+S1 显式县残差：--experiment s1（residual_alpha=1）。
+默认：MDP≥5 Excel 全量县（1149）联合训练；周期性 eval 与 final eval 默认全量 policy rollout。
 """
 from __future__ import annotations
 
@@ -40,6 +41,9 @@ from cnn_config import (  # noqa: E402
     DEFAULT_TARGET_UPDATE_INTERVAL,
     DEV_STATE_COUNTIES_8,
     EMBED_DROPOUT,
+    EMBED_MODE,
+    EMBED_MODES,
+    FILM_HIDDEN,
     META_MLP_HIDDEN,
     N_MAX_COUNTY_RESIDUAL,
     RESIDUAL_ALPHA,
@@ -92,6 +96,8 @@ class MainConfig:
     n_residual: int = N_MAX_COUNTY_RESIDUAL
     residual_alpha: float = RESIDUAL_ALPHA
     embed_dropout: float = EMBED_DROPOUT
+    embed_mode: str = EMBED_MODE
+    film_hidden: int = FILM_HIDDEN
     obs_channel_names: tuple[str, ...] = DEFAULT_OBS_CHANNEL_NAMES
     expert_batch_fraction: float = 1.0
     policy_buffer_capacity: int = 50_000
@@ -112,7 +118,7 @@ def run_main(cfg: MainConfig) -> dict:
     exp = str(cfg.experiment).strip().lower()
     print(
         f"[EB-IQ] experiment={exp} | {EXPERIMENT_DESCRIPTIONS.get(exp, exp)} | "
-        f"residual_alpha={cfg.residual_alpha}",
+        f"residual_alpha={cfg.residual_alpha} | embed_mode={cfg.embed_mode}",
         flush=True,
     )
 
@@ -159,6 +165,8 @@ def run_main(cfg: MainConfig) -> dict:
             n_residual=int(cfg.n_residual),
             residual_alpha=float(cfg.residual_alpha),
             embed_dropout=float(cfg.embed_dropout),
+            embed_mode=str(cfg.embed_mode),
+            film_hidden=int(cfg.film_hidden),
             obs_channel_names=tuple(cfg.obs_channel_names),
             expert_batch_fraction=expert_frac,
             policy_buffer_capacity=int(cfg.policy_buffer_capacity),
@@ -216,7 +224,7 @@ def main() -> None:
         type=str,
         default=DEFAULT_EXPERIMENT,
         choices=EXPERIMENT_CHOICES,
-        help="baseline=state+meta（residual_alpha=0）；s1=显式县残差（residual_alpha=1）",
+        help="baseline=FiLM+state/meta（residual_alpha=0，默认）；s1=显式县残差（residual_alpha=1）",
     )
     parser.add_argument("--mdp-mode", type=str, default="legacy", choices=("legacy", "repeat"))
     parser.add_argument(
@@ -272,6 +280,14 @@ def main() -> None:
     parser.add_argument("--meta-dim", type=int, default=COUNTY_META_DIM)
     parser.add_argument("--residual-alpha", type=float, default=None)
     parser.add_argument(
+        "--embed-mode",
+        type=str,
+        default=EMBED_MODE,
+        choices=EMBED_MODES,
+        help="concat=输入通道拼接（旧）；bottleneck_film=encoder 末端 FiLM 调制（默认）",
+    )
+    parser.add_argument("--film-hidden", type=int, default=FILM_HIDDEN)
+    parser.add_argument(
         "--iq-loss-mode",
         type=str,
         default=DEFAULT_IQ_LOSS_MODE,
@@ -309,6 +325,8 @@ def main() -> None:
             embed_dim=int(args.embed_dim),
             meta_dim=int(args.meta_dim),
             residual_alpha=float(residual_alpha),
+            embed_mode=str(args.embed_mode),
+            film_hidden=int(args.film_hidden),
             iq_loss_mode=str(args.iq_loss_mode),
             use_chi=not bool(args.no_chi),
             device=str(args.device),

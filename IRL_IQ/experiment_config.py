@@ -5,7 +5,7 @@ from paths import DEFAULT_IQ_OUTPUT_BASELINE, DEFAULT_IQ_OUTPUT_S1
 
 EXPERIMENT_BASELINE = "baseline"
 EXPERIMENT_S1 = "s1"
-DEFAULT_EXPERIMENT = EXPERIMENT_S1
+DEFAULT_EXPERIMENT = EXPERIMENT_BASELINE
 
 RESIDUAL_ALPHA_BASELINE = 0.0
 RESIDUAL_ALPHA_S1 = 1.0
@@ -14,10 +14,10 @@ EXPERIMENT_CHOICES = (EXPERIMENT_BASELINE, EXPERIMENT_S1)
 
 EXPERIMENT_DESCRIPTIONS: dict[str, str] = {
     EXPERIMENT_BASELINE: (
-        "Baseline：e_fused = LayerNorm(state_embed + meta_mlp)，residual_alpha=0"
+        "Baseline：Bottleneck FiLM + state/meta（residual_alpha=0，无县残差）"
     ),
     EXPERIMENT_S1: (
-        "S1：显式县残差 e_fused = e_base + residual_alpha * residual_embed，residual_alpha=1"
+        "S1：concat 或 FiLM + 显式县残差 e_fused = e_base + residual_alpha * residual_embed"
     ),
 }
 

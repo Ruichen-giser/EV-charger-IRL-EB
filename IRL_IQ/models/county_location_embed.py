@@ -45,6 +45,25 @@ class CountyLocationEmbed(nn.Module):
             torch.tensor(float(residual_alpha), dtype=torch.float32),
         )
 
+    def forward_components(
+        self,
+        state_ids: torch.Tensor,
+        county_meta: torch.Tensor,
+        county_ids: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """返回 (e_state, e_meta, e_base, e_full)。"""
+        e_state = self.state_embed(state_ids.long().view(-1))
+        e_meta = self.meta_mlp(county_meta.float())
+        e_base = self.fuse_norm(self.embed_dropout(e_state + e_meta))
+
+        alpha = float(self.residual_alpha.item())
+        if county_ids is not None and alpha != 0.0:
+            e_resid = self.residual_embed(county_ids.long().view(-1))
+            e_full = e_base + alpha * e_resid
+        else:
+            e_full = e_base
+        return e_state, e_meta, e_base, e_full
+
     def forward(
         self,
         state_ids: torch.Tensor,
@@ -59,18 +78,5 @@ class CountyLocationEmbed(nn.Module):
         Returns:
             (B, embed_dim)
         """
-        e_state = self.state_embed(state_ids.long().view(-1))
-        e_meta = self.meta_mlp(county_meta.float())
-        e_base = self.fuse_norm(self.embed_dropout(e_state + e_meta))
-
-        alpha = float(self.residual_alpha.item())
-        if county_ids is not None and alpha != 0.0:
-            e_resid = self.residual_embed(county_ids.long().view(-1))
-            return e_base + alpha * e_resid
-
-        if county_ids is not None:
-            # 保留计算图结构；α=0 时不加 residual
-            e_resid = self.residual_embed(county_ids.long().view(-1))
-            return e_base + self.residual_alpha * e_resid
-
-        return e_base
+        _, _, _, e_full = self.forward_components(state_ids, county_meta, county_ids)
+        return e_full

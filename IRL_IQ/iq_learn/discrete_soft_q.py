@@ -14,6 +14,8 @@ from cnn_config import (
     COUNTY_EMBED_DIM,
     COUNTY_META_DIM,
     EMBED_DROPOUT,
+    EMBED_MODE,
+    FILM_HIDDEN,
     META_MLP_HIDDEN,
     N_MAX_COUNTY_RESIDUAL,
     N_US_STATES,
@@ -37,6 +39,7 @@ class SimpleGridCNNQ(nn.Module):
         n_conv_layers: int = CNN_N_CONV_LAYERS,
         dropout: float = CNN_DROPOUT,
         use_location_embed: bool = True,
+        embed_mode: str = EMBED_MODE,
         embed_dim: int = COUNTY_EMBED_DIM,
         meta_dim: int = COUNTY_META_DIM,
         meta_hidden: int = META_MLP_HIDDEN,
@@ -44,6 +47,7 @@ class SimpleGridCNNQ(nn.Module):
         n_residual: int = N_MAX_COUNTY_RESIDUAL,
         residual_alpha: float = RESIDUAL_ALPHA,
         embed_dropout: float = EMBED_DROPOUT,
+        film_hidden: int = FILM_HIDDEN,
     ) -> None:
         super().__init__()
         self.grid_h = int(grid_h)
@@ -56,6 +60,7 @@ class SimpleGridCNNQ(nn.Module):
             n_conv_layers=int(n_conv_layers),
             dropout=float(dropout),
             use_location_embed=bool(use_location_embed),
+            embed_mode=str(embed_mode),
             embed_dim=int(embed_dim),
             meta_dim=int(meta_dim),
             meta_hidden=int(meta_hidden),
@@ -63,6 +68,7 @@ class SimpleGridCNNQ(nn.Module):
             n_residual=int(n_residual),
             residual_alpha=float(residual_alpha),
             embed_dropout=float(embed_dropout),
+            film_hidden=int(film_hidden),
         )
 
     def forward(
@@ -125,6 +131,8 @@ class DiscreteSoftQAgent:
         n_residual: int = N_MAX_COUNTY_RESIDUAL,
         residual_alpha: float = RESIDUAL_ALPHA,
         embed_dropout: float = EMBED_DROPOUT,
+        embed_mode: str = EMBED_MODE,
+        film_hidden: int = FILM_HIDDEN,
         n_conv_layers: int = CNN_N_CONV_LAYERS,
         dropout: float = CNN_DROPOUT,
         county_names: list[str] | None = None,
@@ -144,7 +152,11 @@ class DiscreteSoftQAgent:
         self.iq_loss_mode = mode
         self.target_update_interval = int(target_update_interval)
         self._step = 0
-        self.network_type = "SimpleGridCNN+CountyLocationEmbed"
+        self.embed_mode = str(embed_mode).strip().lower()
+        if self.embed_mode == "bottleneck_film":
+            self.network_type = "SimpleGridCNN+BottleneckFiLM"
+        else:
+            self.network_type = "SimpleGridCNN+CountyLocationEmbed"
         self.grid_h = int(grid_h)
         self.grid_w = int(grid_w)
         self.in_channels = int(in_channels)
@@ -155,6 +167,7 @@ class DiscreteSoftQAgent:
         self.n_states = int(n_states)
         self.n_residual = int(n_residual)
         self.residual_alpha = float(residual_alpha)
+        self.film_hidden = int(film_hidden)
         self.county_names = list(county_names or [])
         self.state_names = list(state_names or [])
         self.location_labels = list(location_labels or self.county_names)
@@ -167,6 +180,7 @@ class DiscreteSoftQAgent:
             n_conv_layers=int(n_conv_layers),
             dropout=float(dropout),
             use_location_embed=True,
+            embed_mode=self.embed_mode,
             embed_dim=self.embed_dim,
             meta_dim=self.meta_dim,
             meta_hidden=int(meta_hidden),
@@ -174,6 +188,7 @@ class DiscreteSoftQAgent:
             n_residual=self.n_residual,
             residual_alpha=self.residual_alpha,
             embed_dropout=float(embed_dropout),
+            film_hidden=self.film_hidden,
         ).to(self.device)
 
         self.target_net = copy.deepcopy(self.q_net)
@@ -348,6 +363,8 @@ class DiscreteSoftQAgent:
                 "n_states": self.n_states,
                 "n_residual": self.n_residual,
                 "residual_alpha": self.residual_alpha,
+                "embed_mode": self.embed_mode,
+                "film_hidden": self.film_hidden,
                 "county_names": self.county_names,
                 "state_names": self.state_names,
                 "location_labels": self.location_labels,
@@ -376,3 +393,7 @@ class DiscreteSoftQAgent:
             loc = getattr(self.q_net.net, "location_embed", None)
             if loc is not None and hasattr(loc, "residual_alpha"):
                 loc.residual_alpha.fill_(self.residual_alpha)
+        if "embed_mode" in blob:
+            self.embed_mode = str(blob["embed_mode"])
+        if "film_hidden" in blob:
+            self.film_hidden = int(blob["film_hidden"])

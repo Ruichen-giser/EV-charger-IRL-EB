@@ -30,9 +30,15 @@ COUNTY_EMBED_DIM = 16
 META_MLP_HIDDEN = 32
 N_US_STATES = 51
 N_MAX_COUNTY_RESIDUAL = 1149
-# baseline：仅 state + meta；S1 通过 --experiment s1 启用 residual_alpha=1.0
+# baseline：state + meta + Bottleneck FiLM，residual_alpha=0
+# S1：--experiment s1 启用 residual_alpha=1.0
 RESIDUAL_ALPHA = 0.0
 EMBED_DROPOUT = 0.1
+
+# 县别条件注入 CNN 的方式：concat（旧）或 bottleneck_film（默认）
+EMBED_MODE = "bottleneck_film"
+EMBED_MODES = ("concat", "bottleneck_film")
+FILM_HIDDEN = 64
 
 # 大规模联合训练默认参数
 DEFAULT_MDP_GE5_COUNTY_LIST_XLSX = DEFAULT_MDP_GE5_XLSX
@@ -41,8 +47,9 @@ DEFAULT_TRAIN_STEPS = 1_000_000
 DEFAULT_EVAL_EVERY = 200
 DEFAULT_LR = 2e-5
 DEFAULT_BATCH_SIZE = 32
-DEFAULT_EVAL_MAX_COUNTIES = 64
-DEFAULT_EVAL_FINAL_MAX_COUNTIES = 64
+# 周期性 eval 与 final eval 默认全量县（0=不截断）；调试可设 --eval-max-counties 64
+DEFAULT_EVAL_MAX_COUNTIES = 0
+DEFAULT_EVAL_FINAL_MAX_COUNTIES = 0
 DEFAULT_TARGET_UPDATE_INTERVAL = 50
 DEFAULT_ROLLOUT_MAX_SESSIONS = 32
 

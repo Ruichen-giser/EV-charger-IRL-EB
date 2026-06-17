@@ -1,4 +1,4 @@
-"""SimpleGridCNN：3×Conv3×3 + 1×1 spatial Q head；CountyLocationEmbed 拼接到输入。"""
+"""SimpleGridCNN：3×Conv3×3 + 1×1 spatial Q head；县别条件经 Bottleneck FiLM 或输入 concat 注入。"""
 from __future__ import annotations
 
 import torch
@@ -8,11 +8,14 @@ from cnn_config import (
     COUNTY_EMBED_DIM,
     COUNTY_META_DIM,
     EMBED_DROPOUT,
+    EMBED_MODE,
+    FILM_HIDDEN,
     META_MLP_HIDDEN,
     N_MAX_COUNTY_RESIDUAL,
     N_US_STATES,
     RESIDUAL_ALPHA,
 )
+from models.bottleneck_film import BottleneckFiLM
 from models.county_location_embed import CountyLocationEmbed
 
 
@@ -32,10 +35,17 @@ def infer_simple_grid_cnn_arch(state_dict: dict[str, torch.Tensor]) -> tuple[int
     return max(n, 2), dropout
 
 
+def _infer_embed_mode(state_dict: dict[str, torch.Tensor]) -> str:
+    if any(k.startswith("film.") for k in state_dict):
+        return "bottleneck_film"
+    return "concat"
+
+
 class SimpleGridCNN(nn.Module):
     """
     输入 (B, C_obs, H, W)。
-    若启用 location embedding，concat (B, C_obs+D, H, W) 再进 encoder。
+    embed_mode=concat：CountyLocationEmbed 平面拼接到输入。
+    embed_mode=bottleneck_film：encoder 只吃 obs，末端用 state/meta FiLM 调制特征。
     输出 (B, H*W) Q 值。
     """
 
@@ -49,6 +59,7 @@ class SimpleGridCNN(nn.Module):
         n_conv_layers: int = 3,
         dropout: float = 0.1,
         use_location_embed: bool = False,
+        embed_mode: str = EMBED_MODE,
         n_states: int = N_US_STATES,
         embed_dim: int = COUNTY_EMBED_DIM,
         meta_dim: int = COUNTY_META_DIM,
@@ -56,6 +67,7 @@ class SimpleGridCNN(nn.Module):
         n_residual: int = N_MAX_COUNTY_RESIDUAL,
         residual_alpha: float = RESIDUAL_ALPHA,
         embed_dropout: float = EMBED_DROPOUT,
+        film_hidden: int = FILM_HIDDEN,
     ) -> None:
         super().__init__()
         self.grid_h = int(grid_h)
@@ -66,6 +78,9 @@ class SimpleGridCNN(nn.Module):
         self.base_in_channels = int(in_channels)
         self.use_location_embed = bool(use_location_embed)
         self.embed_dim = int(embed_dim)
+        self.embed_mode = str(embed_mode).strip().lower()
+        if self.embed_mode not in {"concat", "bottleneck_film"}:
+            raise ValueError(f"未知 embed_mode={embed_mode!r}")
 
         if self.use_location_embed:
             self.location_embed = CountyLocationEmbed(
@@ -77,10 +92,12 @@ class SimpleGridCNN(nn.Module):
                 residual_alpha=float(residual_alpha),
                 embed_dropout=float(embed_dropout),
             )
-            conv_in = self.base_in_channels + self.embed_dim
         else:
             self.location_embed = None
-            conv_in = self.base_in_channels
+
+        conv_in = self.base_in_channels
+        if self.use_location_embed and self.embed_mode == "concat":
+            conv_in = self.base_in_channels + self.embed_dim
 
         widths = [32, 64, 64][: self.n_conv_layers]
         layers: list[nn.Module] = []
@@ -98,7 +115,18 @@ class SimpleGridCNN(nn.Module):
             c_in = int(c_out)
 
         self.encoder = nn.Sequential(*layers)
-        self.head = nn.Conv2d(c_in, 1, kernel_size=1)
+        self.feat_channels = int(c_in)
+        self.head = nn.Conv2d(self.feat_channels, 1, kernel_size=1)
+
+        if self.use_location_embed and self.embed_mode == "bottleneck_film":
+            self.film = BottleneckFiLM(
+                self.embed_dim,
+                self.feat_channels,
+                hidden_dim=int(film_hidden),
+                dropout=float(embed_dropout),
+            )
+        else:
+            self.film = None
 
     @classmethod
     def from_state_dict(
@@ -110,9 +138,11 @@ class SimpleGridCNN(nn.Module):
         grid_w: int,
         action_dim: int,
         use_location_embed: bool = True,
+        embed_mode: str | None = None,
         **kwargs,
     ) -> "SimpleGridCNN":
         n_layers, dropout = infer_simple_grid_cnn_arch(state_dict)
+        mode = str(embed_mode or _infer_embed_mode(state_dict))
         return cls(
             in_channels,
             grid_h,
@@ -121,6 +151,7 @@ class SimpleGridCNN(nn.Module):
             n_conv_layers=n_layers,
             dropout=dropout,
             use_location_embed=use_location_embed,
+            embed_mode=mode,
             **kwargs,
         )
 
@@ -140,6 +171,21 @@ class SimpleGridCNN(nn.Module):
         planes = e.view(b, self.embed_dim, 1, 1).expand(b, self.embed_dim, h, w)
         return torch.cat([obs, planes], dim=1)
 
+    def _apply_bottleneck_film(
+        self,
+        feat: torch.Tensor,
+        state_ids: torch.Tensor,
+        county_meta: torch.Tensor,
+        county_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if self.location_embed is None or self.film is None:
+            return feat
+        e_state, e_meta, _, _ = self.location_embed.forward_components(
+            state_ids, county_meta, county_ids
+        )
+        gamma, beta, _, _ = self.film(e_state, e_meta)
+        return self.film.modulate(feat, gamma, beta)
+
     def forward(
         self,
         obs: torch.Tensor,
@@ -147,8 +193,18 @@ class SimpleGridCNN(nn.Module):
         county_meta: torch.Tensor | None = None,
         county_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        x = self._concat_location_planes(obs, state_ids, county_meta, county_ids)
+        if self.use_location_embed and self.embed_mode == "concat":
+            x = self._concat_location_planes(obs, state_ids, county_meta, county_ids)
+        else:
+            x = obs
+
         b = x.shape[0]
         feat = self.encoder(x)
+
+        if self.use_location_embed and self.embed_mode == "bottleneck_film":
+            if state_ids is None or county_meta is None:
+                raise ValueError("bottleneck_film 需要 state_ids 与 county_meta")
+            feat = self._apply_bottleneck_film(feat, state_ids, county_meta, county_ids)
+
         logits = self.head(feat).squeeze(1)
         return logits.reshape(b, -1)

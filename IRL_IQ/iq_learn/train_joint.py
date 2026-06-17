@@ -1,4 +1,4 @@
-"""多县联合 IQ-Learn：共享 SimpleGridCNN + county embedding（默认 MDP≥5 全量）。"""
+"""多县联合 IQ-Learn：共享 SimpleGridCNN + Bottleneck FiLM（默认 residual_alpha=0）。"""
 from __future__ import annotations
 
 import copy
@@ -26,6 +26,8 @@ from cnn_config import (
     DEFAULT_TRAIN_STEPS,
     DEFAULT_TARGET_UPDATE_INTERVAL,
     EMBED_DROPOUT,
+    EMBED_MODE,
+    FILM_HIDDEN,
     META_MLP_HIDDEN,
     N_MAX_COUNTY_RESIDUAL,
     N_US_STATES,
@@ -84,6 +86,8 @@ class JointTrainConfig:
     n_residual: int = N_MAX_COUNTY_RESIDUAL
     residual_alpha: float = RESIDUAL_ALPHA
     embed_dropout: float = EMBED_DROPOUT
+    embed_mode: str = EMBED_MODE
+    film_hidden: int = FILM_HIDDEN
     use_stratified_buffer: bool = True
     expert_batch_fraction: float = 1.0
     policy_buffer_capacity: int = 50_000
@@ -187,6 +191,8 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         n_residual=int(cfg.n_residual),
         residual_alpha=float(cfg.residual_alpha),
         embed_dropout=float(cfg.embed_dropout),
+        embed_mode=str(cfg.embed_mode),
+        film_hidden=int(cfg.film_hidden),
         dropout=float(cfg.dropout),
         county_names=county_names,
         state_names=list(US_STATE_NAMES),
@@ -231,13 +237,15 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
 
     best_dist = float("inf")
     best_match = 0.0
+    best_f1 = -1.0
     best_state: dict[str, Any] | None = None
 
     if cfg.verbose:
         print(
             f"[EB-IQ] 联合训练 {len(counties)} 县，画布 {canvas.max_h}×{canvas.max_w}，"
             f"专家转移 {len(merged)} 条，obs 通道 {channel_cfg.n_channels}，"
-            f"experiment={cfg.experiment} embed_dim={cfg.embed_dim} meta_dim={cfg.meta_dim} "
+            f"experiment={cfg.experiment} embed_mode={cfg.embed_mode} "
+            f"embed_dim={cfg.embed_dim} meta_dim={cfg.meta_dim} "
             f"residual_alpha={cfg.residual_alpha}，IQ={cfg.iq_loss_mode}",
             flush=True,
         )
@@ -250,6 +258,25 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
             )
         print(
             f"[EB-IQ] 专家数据 lazy 存储（采样时 pad），避免 ~60GB 全画布缓存",
+            flush=True,
+        )
+        print(
+            "[EB-IQ] best checkpoint：eval 子集 policy_rollout_site_f1 最高 → iq_learn_shared_best.pt",
+            flush=True,
+        )
+        eval_scope = (
+            f"全量 {len(counties)} 县"
+            if int(cfg.eval_max_counties) <= 0
+            else f"随机 {int(cfg.eval_max_counties)}/{len(counties)} 县"
+        )
+        final_scope = (
+            f"全量 {len(counties)} 县"
+            if int(cfg.eval_final_max_counties) <= 0
+            else f"随机 {int(cfg.eval_final_max_counties)}/{len(counties)} 县"
+        )
+        print(
+            f"[EB-IQ] eval：周期={eval_scope}（含 expert_rollin + policy_rollout），"
+            f"final={final_scope}",
             flush=True,
         )
         preview = counties if len(counties) <= 8 else counties[:3]
@@ -304,13 +331,22 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         metrics_log.append(row)
 
         if cfg.verbose:
+            n_eval = len(per_county)
+            if eval_cap <= 0 or n_eval >= len(counties):
+                eval_scope = f"全量 {n_eval} 县"
+            else:
+                eval_scope = f"{n_eval}/{len(counties)} 县"
             print(
                 f"step {step}: Q_mean={m['Q_mean']:.3f}, loss={m['loss']:.3f} | "
-                f"{format_eval_log(row)}",
+                f"eval={eval_scope} | {format_eval_log(row)}",
                 flush=True,
             )
 
-        if agg["mean_distance_km"] < best_dist:
+        rollout_f1 = float(row.get("policy_rollout_site_f1", 0.0))
+        if rollout_f1 > best_f1 or (
+            rollout_f1 == best_f1 and agg["mean_distance_km"] < best_dist
+        ):
+            best_f1 = rollout_f1
             best_dist = float(agg["mean_distance_km"])
             best_match = float(agg["mean_expert_match_rate"])
             best_state = copy.deepcopy(agent.q_net.state_dict())
@@ -366,17 +402,24 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         "meta_dim": int(cfg.meta_dim),
         "n_residual": int(cfg.n_residual),
         "residual_alpha": float(cfg.residual_alpha),
+        "embed_mode": str(cfg.embed_mode),
+        "film_hidden": int(cfg.film_hidden),
         "canvas": {"max_h": canvas.max_h, "max_w": canvas.max_w, "n_actions": canvas.n_actions},
         "merged_meta": merged.meta,
         "seed": seed,
         "mdp_mode": current_mdp_mode(),
-        "method": "IQ-Learn joint SimpleGridCNN + county embedding",
-        "network": "SimpleGridCNN+CountyEmbed",
+        "method": "IQ-Learn joint SimpleGridCNN + bottleneck FiLM",
+        "network": (
+            "SimpleGridCNN+BottleneckFiLM"
+            if str(cfg.embed_mode).strip().lower() == "bottleneck_film"
+            else "SimpleGridCNN+CountyEmbed"
+        ),
         "n_expert_transitions_pooled": len(merged),
         "train_steps_ran": int(cfg.train_steps),
         "eval_every": eval_every,
         "best_mean_expert_match_rate": best_match,
         "best_mean_distance_km": best_dist,
+        "best_policy_rollout_site_f1": best_f1,
         "best_policy_checkpoint": str(out / "iq_learn_shared_best.pt"),
         "metrics_log": metrics_log,
         "final_eval": final_ev,
