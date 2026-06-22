@@ -226,7 +226,10 @@ class DiscreteSoftQAgent:
         param_groups = build_q_net_param_groups(self.q_net, self.lr_schedule)
         self.optimizer = torch.optim.Adam(param_groups)
         self.use_amp = self.device.type == "cuda"
-        self._scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        if self.use_amp:
+            self._scaler = torch.amp.GradScaler("cuda")
+        else:
+            self._scaler = None
         self.update_lr_schedule(1)
 
     def update_lr_schedule(self, step: int) -> dict[str, float]:
@@ -272,13 +275,13 @@ class DiscreteSoftQAgent:
         county_meta = batch.get("county_meta")
         county_ids = batch.get("county_ids")
 
-        with torch.cuda.amp.autocast(enabled=self.use_amp):
+        with torch.amp.autocast("cuda", enabled=self.use_amp):
             q_all = self.q_net(obs, state_ids, county_meta, county_ids)
             q_sa = q_all.gather(1, actions.long())
             v_s = masked_soft_value(q_all, mask, self.alpha)
 
         with torch.no_grad():
-            with torch.cuda.amp.autocast(enabled=self.use_amp):
+            with torch.amp.autocast("cuda", enabled=self.use_amp):
                 next_v = self.target_net.soft_value(
                     next_obs, next_mask, self.alpha, state_ids, county_meta, county_ids
                 )
@@ -326,7 +329,7 @@ class DiscreteSoftQAgent:
 
         self.optimizer.zero_grad(set_to_none=True)
         if torch.isfinite(loss):
-            if self.use_amp:
+            if self.use_amp and self._scaler is not None:
                 self._scaler.scale(loss).backward()
                 self._scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), max_norm=10.0)
