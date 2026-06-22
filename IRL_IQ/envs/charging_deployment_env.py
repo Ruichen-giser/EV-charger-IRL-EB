@@ -7,6 +7,8 @@ MDP：
   - 转移：建站后全场距离取 min 更新
   - 环境奖励：默认 0（IRL 由 IQ-Learn 从专家轨迹学 soft Q）
 """
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 

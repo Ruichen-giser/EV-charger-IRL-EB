@@ -1,4 +1,6 @@
 """多通道网格状态（可配置通道子集）。"""
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 

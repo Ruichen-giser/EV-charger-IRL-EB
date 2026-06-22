@@ -13,6 +13,12 @@ from cnn_config import (
     CNN_N_CONV_LAYERS,
     COUNTY_EMBED_DIM,
     COUNTY_META_DIM,
+    DEFAULT_FILM_WARMUP_STEPS,
+    DEFAULT_LR_DECAY_MULT,
+    DEFAULT_LR_DECAY_STEP,
+    DEFAULT_LR_EMBED_MULT,
+    DEFAULT_LR_FILM_MULT,
+    DEFAULT_LR_HEAD_MULT,
     EMBED_DROPOUT,
     EMBED_MODE,
     FILM_HIDDEN,
@@ -23,6 +29,14 @@ from cnn_config import (
 )
 from models.simple_grid_cnn import SimpleGridCNN
 from iq_learn.iq_loss import IQ_LOSS_MODES, iq_learn_loss
+from iq_learn.param_groups import (
+    LRScheduleConfig,
+    apply_learning_rates,
+    build_q_net_param_groups,
+    current_learning_rates,
+    learning_rates_for_step,
+    measure_film_modulation,
+)
 from models.soft_q_ops import masked_soft_value, soft_policy_entropy
 
 
@@ -138,6 +152,12 @@ class DiscreteSoftQAgent:
         county_names: list[str] | None = None,
         state_names: list[str] | None = None,
         location_labels: list[str] | None = None,
+        lr_head_mult: float = DEFAULT_LR_HEAD_MULT,
+        lr_embed_mult: float = DEFAULT_LR_EMBED_MULT,
+        lr_film_mult: float = DEFAULT_LR_FILM_MULT,
+        film_warmup_steps: int = DEFAULT_FILM_WARMUP_STEPS,
+        lr_decay_step: int = DEFAULT_LR_DECAY_STEP,
+        lr_decay_mult: float = DEFAULT_LR_DECAY_MULT,
         **_: Any,
     ) -> None:
         del obs_dim
@@ -171,6 +191,15 @@ class DiscreteSoftQAgent:
         self.county_names = list(county_names or [])
         self.state_names = list(state_names or [])
         self.location_labels = list(location_labels or self.county_names)
+        self.lr_schedule = LRScheduleConfig(
+            base_lr=float(lr),
+            lr_head_mult=float(lr_head_mult),
+            lr_embed_mult=float(lr_embed_mult),
+            lr_film_mult=float(lr_film_mult),
+            film_warmup_steps=int(film_warmup_steps),
+            lr_decay_step=int(lr_decay_step),
+            lr_decay_mult=float(lr_decay_mult),
+        )
 
         self.q_net: nn.Module = SimpleGridCNNQ(
             in_channels=self.in_channels,
@@ -194,11 +223,42 @@ class DiscreteSoftQAgent:
         self.target_net = copy.deepcopy(self.q_net)
         for p in self.target_net.parameters():
             p.requires_grad = False
-        self.optimizer = torch.optim.Adam(self.q_net.parameters(), lr=float(lr))
+        param_groups = build_q_net_param_groups(self.q_net, self.lr_schedule)
+        self.optimizer = torch.optim.Adam(param_groups)
         self.use_amp = self.device.type == "cuda"
         self._scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.update_lr_schedule(1)
 
-    def train_step(self, batch: dict[str, torch.Tensor]) -> dict[str, float]:
+    def update_lr_schedule(self, step: int) -> dict[str, float]:
+        lrs = learning_rates_for_step(self.lr_schedule, step)
+        apply_learning_rates(self.optimizer, lrs)
+        return lrs
+
+    def current_learning_rates(self) -> dict[str, float]:
+        return current_learning_rates(self.optimizer)
+
+    @torch.no_grad()
+    def measure_film_modulation(self, batch: dict[str, torch.Tensor]) -> dict[str, float]:
+        if self.embed_mode != "bottleneck_film":
+            return {}
+        state_ids = batch.get("state_ids")
+        county_meta = batch.get("county_meta")
+        if state_ids is None or county_meta is None:
+            return {}
+        was_training = self.q_net.training
+        self.q_net.eval()
+        stats = measure_film_modulation(
+            self.q_net,
+            state_ids=state_ids,
+            county_meta=county_meta,
+            county_ids=batch.get("county_ids"),
+        )
+        self.q_net.train(mode=was_training)
+        return stats
+
+    def train_step(self, batch: dict[str, torch.Tensor], *, step: int | None = None) -> dict[str, float]:
+        train_step_idx = int(step if step is not None else self._step + 1)
+        self.update_lr_schedule(train_step_idx)
         self.q_net.train()
 
         obs = batch["obs"]
@@ -368,6 +428,7 @@ class DiscreteSoftQAgent:
                 "county_names": self.county_names,
                 "state_names": self.state_names,
                 "location_labels": self.location_labels,
+                "lr_schedule": self.lr_schedule.to_dict(),
             },
             path,
         )

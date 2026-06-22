@@ -3,6 +3,8 @@
 
 补缺格在格心重采样 GIS 特征，运行时从 gis_align 导入采样函数（避免与 gis_align 循环依赖）。
 """
+from __future__ import annotations
+
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any

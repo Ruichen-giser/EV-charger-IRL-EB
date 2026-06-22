@@ -19,8 +19,14 @@ from cnn_config import (
     DEFAULT_EVAL_FINAL_MAX_COUNTIES,
     DEFAULT_EVAL_MAX_COUNTIES,
     DEFAULT_EVAL_EVERY,
+    DEFAULT_FILM_WARMUP_STEPS,
     DEFAULT_IQ_LOSS_MODE,
     DEFAULT_LR,
+    DEFAULT_LR_DECAY_MULT,
+    DEFAULT_LR_DECAY_STEP,
+    DEFAULT_LR_EMBED_MULT,
+    DEFAULT_LR_FILM_MULT,
+    DEFAULT_LR_HEAD_MULT,
     DEFAULT_OBS_CHANNEL_NAMES,
     DEFAULT_ROLLOUT_MAX_SESSIONS,
     DEFAULT_TRAIN_STEPS,
@@ -72,6 +78,12 @@ class JointTrainConfig:
     use_chi: bool = True
     iq_loss_mode: str = DEFAULT_IQ_LOSS_MODE
     lr: float = DEFAULT_LR
+    lr_head_mult: float = DEFAULT_LR_HEAD_MULT
+    lr_embed_mult: float = DEFAULT_LR_EMBED_MULT
+    lr_film_mult: float = DEFAULT_LR_FILM_MULT
+    film_warmup_steps: int = DEFAULT_FILM_WARMUP_STEPS
+    lr_decay_step: int = DEFAULT_LR_DECAY_STEP
+    lr_decay_mult: float = DEFAULT_LR_DECAY_MULT
     batch_size: int = DEFAULT_BATCH_SIZE
     train_steps: int = DEFAULT_TRAIN_STEPS
     eval_every: int = DEFAULT_EVAL_EVERY
@@ -174,6 +186,12 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         n_actions=int(canvas.n_actions),
         device=device,
         lr=float(cfg.lr),
+        lr_head_mult=float(cfg.lr_head_mult),
+        lr_embed_mult=float(cfg.lr_embed_mult),
+        lr_film_mult=float(cfg.lr_film_mult),
+        film_warmup_steps=int(cfg.film_warmup_steps),
+        lr_decay_step=int(cfg.lr_decay_step),
+        lr_decay_mult=float(cfg.lr_decay_mult),
         gamma=float(cfg.gamma),
         alpha=float(cfg.alpha),
         alpha_reg=float(cfg.alpha_reg),
@@ -249,6 +267,17 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
             f"residual_alpha={cfg.residual_alpha}，IQ={cfg.iq_loss_mode}",
             flush=True,
         )
+        lrs = agent.current_learning_rates()
+        print(
+            "[EB-IQ] 分组 LR："
+            f"encoder={lrs.get('encoder', cfg.lr):.2e} "
+            f"head={lrs.get('head', cfg.lr):.2e} "
+            f"embed={lrs.get('location_embed', cfg.lr):.2e} "
+            f"film={lrs.get('film', cfg.lr):.2e} | "
+            f"warmup={int(cfg.film_warmup_steps)} "
+            f"decay_step={int(cfg.lr_decay_step)}×{float(cfg.lr_decay_mult)}",
+            flush=True,
+        )
         canvas_cells = int(canvas.max_h) * int(canvas.max_w)
         if canvas_cells > 10_000 and int(cfg.batch_size) > 32:
             print(
@@ -304,11 +333,14 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
             device=agent.device,
             rng=rng,
         )
-        m = agent.train_step(batch)
+        m = agent.train_step(batch, step=step)
 
         if step % eval_every != 0:
             continue
 
+        film_probe = merged.sample(min(8, len(merged)), agent.device, rng)
+        film_stats = agent.measure_film_modulation(film_probe)
+        lr_now = agent.current_learning_rates()
         eval_cap = int(cfg.eval_max_counties)
         per_county, agg = evaluate_joint_all(
             agent,
@@ -327,6 +359,8 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
             "policy_entropy": m["policy_entropy"],
             "loss": m["loss"],
             **aggregate_joint_eval_metrics(per_county),
+            **{f"lr_{k}": v for k, v in lr_now.items()},
+            **film_stats,
         }
         metrics_log.append(row)
 
@@ -338,7 +372,10 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
                 eval_scope = f"{n_eval}/{len(counties)} 县"
             print(
                 f"step {step}: Q_mean={m['Q_mean']:.3f}, loss={m['loss']:.3f} | "
-                f"eval={eval_scope} | {format_eval_log(row)}",
+                f"eval={eval_scope} | {format_eval_log(row)} | "
+                f"lr_enc={lr_now.get('encoder', 0.0):.1e} "
+                f"lr_film={lr_now.get('film', 0.0):.1e} "
+                f"|γ|={film_stats.get('film_gamma_abs_mean', 0.0):.4f}",
                 flush=True,
             )
 
@@ -404,6 +441,15 @@ def train_joint(cfg: JointTrainConfig) -> tuple[DiscreteSoftQAgent, dict[str, An
         "residual_alpha": float(cfg.residual_alpha),
         "embed_mode": str(cfg.embed_mode),
         "film_hidden": int(cfg.film_hidden),
+        "lr_schedule": {
+            "base_lr": float(cfg.lr),
+            "lr_head_mult": float(cfg.lr_head_mult),
+            "lr_embed_mult": float(cfg.lr_embed_mult),
+            "lr_film_mult": float(cfg.lr_film_mult),
+            "film_warmup_steps": int(cfg.film_warmup_steps),
+            "lr_decay_step": int(cfg.lr_decay_step),
+            "lr_decay_mult": float(cfg.lr_decay_mult),
+        },
         "canvas": {"max_h": canvas.max_h, "max_w": canvas.max_w, "n_actions": canvas.n_actions},
         "merged_meta": merged.meta,
         "seed": seed,

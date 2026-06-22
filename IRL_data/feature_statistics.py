@@ -7,6 +7,8 @@ IRL_data 特征分布统计与可视化。
   1. 全部 2 km 网格的五维特征直方图（柱状图）
   2. 历史充电站所在网格的五维特征直方图（柱状图）
 """
+from __future__ import annotations
+
 import json
 import pickle
 from dataclasses import dataclass, field

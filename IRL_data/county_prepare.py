@@ -7,6 +7,8 @@
   → 聚合 2 km、归一化、补缺格（grid_ops）
   → 输出该县 events + grids
 """
+from __future__ import annotations
+
 import hashlib
 import json
 import pickle

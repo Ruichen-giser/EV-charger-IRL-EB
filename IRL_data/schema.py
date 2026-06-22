@@ -1,4 +1,6 @@
 """v6 数据产物版本号与网格字段名常量。"""
+from __future__ import annotations
+
 # prepared_irl_dataset.pkl 的 schema 标识
 SCHEMA_VERSION = "v6_prepared_irl_dataset_v1"
 

@@ -33,8 +33,14 @@ from cnn_config import (  # noqa: E402
     DEFAULT_EVAL_FINAL_MAX_COUNTIES,
     DEFAULT_EVAL_MAX_COUNTIES,
     DEFAULT_EVAL_EVERY,
+    DEFAULT_FILM_WARMUP_STEPS,
     DEFAULT_IQ_LOSS_MODE,
     DEFAULT_LR,
+    DEFAULT_LR_DECAY_MULT,
+    DEFAULT_LR_DECAY_STEP,
+    DEFAULT_LR_EMBED_MULT,
+    DEFAULT_LR_FILM_MULT,
+    DEFAULT_LR_HEAD_MULT,
     DEFAULT_OBS_CHANNEL_NAMES,
     DEFAULT_ROLLOUT_MAX_SESSIONS,
     DEFAULT_TRAIN_STEPS,
@@ -80,6 +86,12 @@ class MainConfig:
     use_chi: bool = True
     iq_loss_mode: str = DEFAULT_IQ_LOSS_MODE
     lr: float = DEFAULT_LR
+    lr_head_mult: float = DEFAULT_LR_HEAD_MULT
+    lr_embed_mult: float = DEFAULT_LR_EMBED_MULT
+    lr_film_mult: float = DEFAULT_LR_FILM_MULT
+    film_warmup_steps: int = DEFAULT_FILM_WARMUP_STEPS
+    lr_decay_step: int = DEFAULT_LR_DECAY_STEP
+    lr_decay_mult: float = DEFAULT_LR_DECAY_MULT
     batch_size: int = DEFAULT_BATCH_SIZE
     train_steps: int = DEFAULT_TRAIN_STEPS
     eval_every: int = DEFAULT_EVAL_EVERY
@@ -149,6 +161,12 @@ def run_main(cfg: MainConfig) -> dict:
             use_chi=bool(cfg.use_chi),
             iq_loss_mode=str(cfg.iq_loss_mode),
             lr=float(cfg.lr),
+            lr_head_mult=float(cfg.lr_head_mult),
+            lr_embed_mult=float(cfg.lr_embed_mult),
+            lr_film_mult=float(cfg.lr_film_mult),
+            film_warmup_steps=int(cfg.film_warmup_steps),
+            lr_decay_step=int(cfg.lr_decay_step),
+            lr_decay_mult=float(cfg.lr_decay_mult),
             batch_size=int(cfg.batch_size),
             train_steps=int(cfg.train_steps),
             eval_every=int(cfg.eval_every),
@@ -274,7 +292,23 @@ def main() -> None:
         help="iq-loss-mode=online 时 rollout 池活跃 session 上限",
     )
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--lr", type=float, default=DEFAULT_LR)
+    parser.add_argument("--lr", type=float, default=DEFAULT_LR, help="encoder base LR")
+    parser.add_argument("--lr-head-mult", type=float, default=DEFAULT_LR_HEAD_MULT)
+    parser.add_argument("--lr-embed-mult", type=float, default=DEFAULT_LR_EMBED_MULT)
+    parser.add_argument("--lr-film-mult", type=float, default=DEFAULT_LR_FILM_MULT)
+    parser.add_argument(
+        "--film-warmup-steps",
+        type=int,
+        default=DEFAULT_FILM_WARMUP_STEPS,
+        help="embed/film LR 线性 warmup 步数；0=关闭",
+    )
+    parser.add_argument(
+        "--lr-decay-step",
+        type=int,
+        default=DEFAULT_LR_DECAY_STEP,
+        help="全局 LR 衰减起始 step；0=关闭",
+    )
+    parser.add_argument("--lr-decay-mult", type=float, default=DEFAULT_LR_DECAY_MULT)
     parser.add_argument("--dropout", type=float, default=CNN_DROPOUT)
     parser.add_argument("--embed-dim", type=int, default=COUNTY_EMBED_DIM)
     parser.add_argument("--meta-dim", type=int, default=COUNTY_META_DIM)
@@ -321,6 +355,12 @@ def main() -> None:
             target_update_interval=int(args.target_update_interval),
             batch_size=int(args.batch_size),
             lr=float(args.lr),
+            lr_head_mult=float(args.lr_head_mult),
+            lr_embed_mult=float(args.lr_embed_mult),
+            lr_film_mult=float(args.lr_film_mult),
+            film_warmup_steps=int(args.film_warmup_steps),
+            lr_decay_step=int(args.lr_decay_step),
+            lr_decay_mult=float(args.lr_decay_mult),
             dropout=float(args.dropout),
             embed_dim=int(args.embed_dim),
             meta_dim=int(args.meta_dim),

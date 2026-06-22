@@ -71,6 +71,7 @@ CKPT_REQUIRED_KEYS = {
     "film_hidden",
     "county_names",
     "location_labels",
+    "lr_schedule",
 }
 
 

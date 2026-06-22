@@ -5,6 +5,8 @@ IRL_data 入口（三步 pipeline）：
 2. 按 Excel（MDP≥5）或 county_names 逐县切分轨迹与 grids
 3. 存储 prepared_irl_dataset.pkl 与 grid_tensors/*.npz，供 IRL_BC / IRL_IQ 读取
 """
+from __future__ import annotations
+
 import json
 import os
 import pickle

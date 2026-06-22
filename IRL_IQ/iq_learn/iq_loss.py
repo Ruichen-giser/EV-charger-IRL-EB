@@ -4,6 +4,8 @@ IQ-Learn 损失（NeurIPS 2021），参考 https://github.com/Div-Infinity/IQ-Le
 - offline（value_expert）：Q 项、V 项、χ² 均在专家转移上
 - online（value + regularize）：Q 项在专家上；V 项在专家+策略上；(V-γV').mean()；χ² 可选覆盖全 batch
 """
+from __future__ import annotations
+
 import torch
 
 IQ_LOSS_MODES = ("online", "offline")

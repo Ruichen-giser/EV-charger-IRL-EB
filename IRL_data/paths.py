@@ -1,4 +1,6 @@
 """IRL_data 路径配置：相对仓库根目录自动推导，无需写死绝对路径。"""
+from __future__ import annotations
+
 from pathlib import Path
 
 IRL_DATA_DIR = Path(__file__).resolve().parent

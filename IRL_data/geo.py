@@ -1,6 +1,8 @@
 """
 步骤 1a — 空间基底：县界 GeoJSON、坐标系、建站事件落在县内。
 """
+from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
 

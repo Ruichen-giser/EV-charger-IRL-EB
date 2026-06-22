@@ -1,4 +1,6 @@
 """pipeline 步骤 3：稀疏 grids → 稠密 (H,W,5) npz + expert_actions，供 IRL_BC / IRL_IQ。"""
+from __future__ import annotations
+
 import pickle
 from pathlib import Path
 from typing import Any

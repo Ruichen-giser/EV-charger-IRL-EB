@@ -1,4 +1,6 @@
 """单县专家 (s,a,s') 收集，供 BC / 评估使用。"""
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 import numpy as np

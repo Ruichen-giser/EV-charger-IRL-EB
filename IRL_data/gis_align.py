@@ -3,6 +3,8 @@
 
 对外主入口：build_county_grid_1km → 县界内 1 km 格 + 五类原始特征列。
 """
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any
 

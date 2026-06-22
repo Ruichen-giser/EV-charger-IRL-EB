@@ -1,4 +1,6 @@
 """裁剪县网格：保留与专家建站格连通的 valid 网络，再取最小外接矩形。"""
+from __future__ import annotations
+
 from collections import deque
 from pathlib import Path
 from typing import Any
